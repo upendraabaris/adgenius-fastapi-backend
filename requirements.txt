@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+sqlalchemy>=1.4
+aiosqlite
+databases
+pydantic
+python-jose[cryptography]
+passlib[bcrypt]
+mcp-use
+langchain-google-genai
+python-dotenv
