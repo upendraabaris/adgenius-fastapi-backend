@@ -6,6 +6,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 # Simple in-memory cache so we don't recreate client/agent on every message
 _AGENT_CACHE: dict[int, MCPAgent] = {}
 _ACCESS_TOKEN_CACHE: dict[int, str] = {}
+_CLIENT_CACHE: dict[int, MCPClient] = {}
 
 
 async def create_user_agent(user_id: int, access_token: str) -> MCPAgent:
@@ -63,3 +64,44 @@ async def create_user_agent(user_id: int, access_token: str) -> MCPAgent:
     _ACCESS_TOKEN_CACHE[user_id] = access_token
 
     return agent
+
+
+async def create_user_client(user_id: int, access_token: str) -> MCPClient:
+    """
+    Create (or reuse) an MCPClient configured for the user's Meta token.
+    This is for direct tool calls without using the agent.
+    """
+    # Reuse existing client if token hasn't changed
+    cached_client = _CLIENT_CACHE.get(user_id)
+    cached_token = _ACCESS_TOKEN_CACHE.get(user_id)
+    if cached_client is not None and cached_token == access_token:
+        return cached_client
+
+    # load base mcp_config and override env for meta-ads server
+    import json
+    base = {}
+    try:
+        with open(settings.MCP_CONFIG_PATH, "r") as f:
+            base = json.load(f)
+    except Exception:
+        base = {}
+
+    # Ensure meta-ads exists and set env
+    if "mcpServers" not in base:
+        base["mcpServers"] = {}
+    base["mcpServers"]["meta-ads"] = base["mcpServers"].get("meta-ads", {})
+    base["mcpServers"]["meta-ads"]["env"] = base["mcpServers"]["meta-ads"].get("env", {})
+    base["mcpServers"]["meta-ads"]["env"]["META_ACCESS_TOKEN"] = access_token
+
+    # write a temporary config file
+    temp_cfg = "./mcp_temp.json"
+    with open(temp_cfg, "w") as f:
+        json.dump(base, f)
+
+    client = MCPClient.from_config_file(temp_cfg)
+
+    # Cache for subsequent calls
+    _CLIENT_CACHE[user_id] = client
+    _ACCESS_TOKEN_CACHE[user_id] = access_token
+
+    return client
