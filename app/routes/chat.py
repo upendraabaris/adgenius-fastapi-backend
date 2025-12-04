@@ -42,10 +42,38 @@ async def chat(
         )
     )
     integration = result.scalars().first()
+
+    # If user is not connected to any Meta account, return a friendly guidance message
     if not integration:
-        raise HTTPException(status_code=400, detail="No Meta integration found for user")
+        guidance = (
+            "It looks like you don't have a Meta Ads account connected yet. "
+            "Please go to the Settings page, connect your Meta Ads account under "
+            "\"Connected Accounts\", and then come back here to ask questions "
+            "about your campaigns."
+        )
+        return {
+            "success": False,
+            "tool": None,
+            "args": None,
+            "result": None,
+            "reply": guidance,
+        }
+
+    # If integration exists but no primary ad account is selected
     if not integration.selected_ad_account:
-        raise HTTPException(status_code=400, detail="No ad account selected for this user")
+        guidance = (
+            "You are connected to Meta, but no primary ad account is selected yet. "
+            "Please open the Settings page, use the \"Select/Change Account\" option "
+            "under Meta Ads in Connected Accounts, choose an ad account, and then "
+            "return to this chat to ask about your performance."
+        )
+        return {
+            "success": False,
+            "tool": None,
+            "args": None,
+            "result": None,
+            "reply": guidance,
+        }
 
     access_token = integration.access_token
     ad_account_id = integration.selected_ad_account

@@ -18,15 +18,28 @@ async def create_business(
     db: AsyncSession = Depends(get_db),
 ):
     user_id = request.state.user_id  # Extract user_id from the middleware
-    new = models.BusinessProfile(
-        userId=user_id,
-        businessName=b.businessName,
-        objective=b.objective,
-        websiteUrl=b.websiteUrl,
-        createdAt=datetime.utcnow(),
-        updatedAt=datetime.utcnow()
+
+    result = await db.execute(
+        select(models.BusinessProfile).where(models.BusinessProfile.userId == user_id)
     )
-    db.add(new)
+    business = result.scalars().first()
+
+    if business:
+        business.businessName = b.businessName
+        business.objective = b.objective
+        business.websiteUrl = b.websiteUrl
+        business.updatedAt = datetime.utcnow()
+    else:
+        business = models.BusinessProfile(
+            userId=user_id,
+            businessName=b.businessName,
+            objective=b.objective,
+            websiteUrl=b.websiteUrl,
+            createdAt=datetime.utcnow(),
+            updatedAt=datetime.utcnow()
+        )
+        db.add(business)
+
     await db.commit()
-    await db.refresh(new)
-    return new
+    await db.refresh(business)
+    return business
