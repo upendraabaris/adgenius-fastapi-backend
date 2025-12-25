@@ -27,7 +27,7 @@ def _require_user_id(request: Request) -> int:
     return int(user_id)
 
 
-@router.post("/", response_model=ChatResponse)
+@router.post("", response_model=ChatResponse)
 async def chat(
     req: ChatRequest,
     request: Request,
