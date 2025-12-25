@@ -8,7 +8,7 @@ def start_oauth():
     params = {
         "client_id": os.getenv("META_APP_ID"),
         "redirect_uri": os.getenv("META_REDIRECT_URI"),
-        "scope": "ads_read,ads_management,business_management",
+        "scope": "ads_read,ads_management",
         "auth_type": "rerequest",
     }
     url = f"https://www.facebook.com/v20.0/dialog/oauth?{urlencode(params)}"
@@ -41,101 +41,231 @@ async def get_ad_accounts(access_token: str):
 
 
 async def get_campaigns(user_id: int, access_token: str, account_id: str):
-    """Fetch campaigns for a given ad account using MCP."""
-    from app.mcp_utils import create_user_agent
-    
-    # Use MCPAgent to call MCP tools
-    agent = await create_user_agent(user_id, access_token)
-    
-    # Use agent to get campaigns data
-    prompt = f"List all campaigns for ad account {account_id}. Return only the campaign data as JSON array with fields: id, name, status, objective. Do not include any explanation, just the JSON array."
-    
+    """Fetch campaigns for a given ad account using MCP with better error handling."""
     try:
-        result = await agent.run(prompt)
-        # Parse the result - agent returns text, we need to extract JSON
-        import json
-        import re
+        # Use MCP client directly for more reliable results
+        client = await create_user_client(user_id, access_token)
         
-        # Try to find JSON in the response
-        json_match = re.search(r'\[.*\]', result, re.DOTALL)
-        if json_match:
-            campaigns = json.loads(json_match.group())
-            return campaigns if isinstance(campaigns, list) else []
+        # Ensure account_id has 'act_' prefix
+        if not account_id.startswith('act_'):
+            account_id = f'act_{account_id}'
         
-        # If no JSON found, try to parse the whole response
-        try:
-            campaigns = json.loads(result)
-            return campaigns if isinstance(campaigns, list) else []
-        except:
-            return []
-    except Exception as e:
+        # Call MCP tool directly
+        result = await client.call_tool(
+            "meta-ads",
+            "get_campaigns", 
+            {"account_id": account_id}
+        )
+        
+        if result and isinstance(result, dict):
+            campaigns = result.get("content", [])
+            if isinstance(campaigns, list):
+                return campaigns
+            elif isinstance(campaigns, str):
+                # Try to parse JSON string
+                import json
+                try:
+                    parsed = json.loads(campaigns)
+                    return parsed if isinstance(parsed, list) else []
+                except:
+                    return []
+        
         return []
+        
+    except Exception as e:
+        print(f"MCP Error fetching campaigns: {e}")
+        # Fallback to direct API call if MCP fails
+        try:
+            if not account_id.startswith('act_'):
+                account_id = f'act_{account_id}'
+            
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"https://graph.facebook.com/v20.0/{account_id}/campaigns",
+                    params={
+                        "access_token": access_token,
+                        "fields": "id,name,status,objective,created_time,updated_time",
+                        "limit": 100  # Increased limit to get more campaigns
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return data.get("data", [])
+        except Exception as fallback_error:
+            print(f"Fallback API Error: {fallback_error}")
+            return []
 
 
 async def get_account_insights(user_id: int, access_token: str, account_id: str, date_preset: str = "last_30d"):
-    """Fetch insights/performance data for an ad account using MCP."""
-    from app.mcp_utils import create_user_agent
-    
-    # Use MCPAgent to call MCP tools
-    agent = await create_user_agent(user_id, access_token)
-    
-    # Use agent to get account insights
-    prompt = f"Get account-level insights for ad account {account_id} for {date_preset}. Return only the insights data as JSON object with fields: spend, impressions, clicks, ctr, cpc, actions, action_values. Do not include any explanation, just the JSON object."
-    
+    """Fetch insights/performance data for an ad account with MCP fallback to direct API."""
     try:
-        result = await agent.run(prompt)
-        # Parse the result
-        import json
-        import re
+        # Try MCP first
+        client = await create_user_client(user_id, access_token)
         
-        # Try to find JSON in the response
-        json_match = re.search(r'\{.*\}', result, re.DOTALL)
-        if json_match:
-            insights = json.loads(json_match.group())
-            # If it's a list, take first item
-            if isinstance(insights, list) and len(insights) > 0:
-                return insights[0]
-            return insights if isinstance(insights, dict) else {}
+        if not account_id.startswith('act_'):
+            account_id = f'act_{account_id}'
         
-        # If no JSON found, try to parse the whole response
-        try:
-            insights = json.loads(result)
-            if isinstance(insights, list) and len(insights) > 0:
-                return insights[0]
-            return insights if isinstance(insights, dict) else {}
-        except:
-            return {}
+        result = await client.call_tool(
+            "meta-ads",
+            "get_insights",
+            {
+                "account_id": account_id,
+                "level": "account",
+                "date_preset": date_preset
+            }
+        )
+        
+        if result and isinstance(result, dict):
+            insights = result.get("content", {})
+            if isinstance(insights, dict):
+                return insights
+            elif isinstance(insights, str):
+                import json
+                try:
+                    parsed = json.loads(insights)
+                    return parsed if isinstance(parsed, dict) else {}
+                except:
+                    pass
+        
     except Exception as e:
+        print(f"MCP Error fetching insights: {e}")
+    
+    # Fallback to direct API
+    try:
+        if not account_id.startswith('act_'):
+            account_id = f'act_{account_id}'
+        
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"https://graph.facebook.com/v20.0/{account_id}/insights",
+                params={
+                    "access_token": access_token,
+                    "fields": "spend,impressions,clicks,ctr,cpc,actions,action_values,reach,frequency",
+                    "date_preset": date_preset,
+                    "level": "account"
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            insights_data = data.get("data", [])
+            return insights_data[0] if insights_data else {}
+    except Exception as fallback_error:
+        print(f"Fallback insights error: {fallback_error}")
         return {}
 
 
 async def get_campaign_insights(user_id: int, access_token: str, account_id: str, date_preset: str = "last_30d"):
-    """Fetch insights for all campaigns in an ad account using MCP."""
-    from app.mcp_utils import create_user_agent
+    """Fetch insights for all campaigns with direct API first, MCP as fallback."""
     
-    # Use MCPAgent to call MCP tools
-    agent = await create_user_agent(user_id, access_token)
-    
-    # Use agent to get campaign insights
-    prompt = f"Get campaign-level insights for ad account {account_id} for {date_preset}. Return only the insights data as JSON array with fields: campaign_id, campaign_name, spend, impressions, clicks, ctr, cpc, actions, action_values. Do not include any explanation, just the JSON array."
-    
+    # Try direct API first for better reliability
     try:
-        result = await agent.run(prompt)
-        # Parse the result
-        import json
-        import re
+        if not account_id.startswith('act_'):
+            account_id = f'act_{account_id}'
         
-        # Try to find JSON in the response
-        json_match = re.search(r'\[.*\]', result, re.DOTALL)
-        if json_match:
-            insights = json.loads(json_match.group())
-            return insights if isinstance(insights, list) else []
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"https://graph.facebook.com/v20.0/{account_id}/insights",
+                params={
+                    "access_token": access_token,
+                    "fields": "campaign_id,campaign_name,spend,impressions,clicks,ctr,cpc,actions,action_values,reach,frequency",
+                    "date_preset": date_preset,
+                    "level": "campaign"
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            insights = data.get("data", [])
+            print(f"Direct API: Got {len(insights)} campaign insights")
+            return insights
+    except Exception as direct_error:
+        print(f"Direct API campaign insights error: {direct_error}")
+    
+    # Fallback to MCP if direct API fails
+    try:
+        client = await create_user_client(user_id, access_token)
         
-        # If no JSON found, try to parse the whole response
-        try:
-            insights = json.loads(result)
-            return insights if isinstance(insights, list) else []
-        except:
-            return []
+        if not account_id.startswith('act_'):
+            account_id = f'act_{account_id}'
+        
+        result = await client.call_tool(
+            "meta-ads",
+            "get_insights",
+            {
+                "account_id": account_id,
+                "level": "campaign",
+                "date_preset": date_preset
+            }
+        )
+        
+        if result and isinstance(result, dict):
+            insights = result.get("content", [])
+            if isinstance(insights, list):
+                print(f"MCP: Got {len(insights)} campaign insights")
+                return insights
+            elif isinstance(insights, str):
+                import json
+                try:
+                    parsed = json.loads(insights)
+                    return parsed if isinstance(parsed, list) else []
+                except:
+                    pass
+        
     except Exception as e:
+        print(f"MCP Error fetching campaign insights: {e}")
+    
+    print("Both direct API and MCP failed for campaign insights")
+    return []
+
+async def get_campaign_budgets(user_id: int, access_token: str, account_id: str):
+    """Fetch campaign budgets and daily spend limits."""
+    try:
+        # Try MCP first
+        client = await create_user_client(user_id, access_token)
+        
+        if not account_id.startswith('act_'):
+            account_id = f'act_{account_id}'
+        
+        result = await client.call_tool(
+            "meta-ads",
+            "get_campaigns",
+            {
+                "account_id": account_id,
+                "fields": "id,name,daily_budget,lifetime_budget,budget_remaining"
+            }
+        )
+        
+        if result and isinstance(result, dict):
+            campaigns = result.get("content", [])
+            if isinstance(campaigns, list):
+                return campaigns
+            elif isinstance(campaigns, str):
+                import json
+                try:
+                    parsed = json.loads(campaigns)
+                    return parsed if isinstance(parsed, list) else []
+                except:
+                    pass
+        
+    except Exception as e:
+        print(f"MCP Error fetching campaign budgets: {e}")
+    
+    # Fallback to direct API
+    try:
+        if not account_id.startswith('act_'):
+            account_id = f'act_{account_id}'
+        
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"https://graph.facebook.com/v20.0/{account_id}/campaigns",
+                params={
+                    "access_token": access_token,
+                    "fields": "id,name,daily_budget,lifetime_budget,budget_remaining,status",
+                    "limit": 100
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("data", [])
+    except Exception as fallback_error:
+        print(f"Fallback campaign budgets error: {fallback_error}")
         return []

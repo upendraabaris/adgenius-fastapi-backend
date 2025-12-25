@@ -83,7 +83,7 @@ async def oauth_callback(code: str = None, state: str = None, db: AsyncSession =
     if not saved_integration:
         raise HTTPException(status_code=500, detail="Failed to save integration")
 
-    frontend = os.getenv("FRONTEND_URL", "http://localhost:5176")
+    frontend = os.getenv("FRONTEND_URL", "https://growcommerce.platinum-infotech.com")
     
     # Check if redirect destination is in state token
     redirect_to = payload.get("redirect", "onboarding")

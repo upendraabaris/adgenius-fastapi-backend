@@ -40,6 +40,14 @@ app.include_router(settings.router)
 @app.on_event("startup")
 async def startup():
     await init_db()
+    
+    # Pre-load MCP config to avoid first-request delay
+    try:
+        from app.mcp_utils import _get_base_config
+        config = _get_base_config()  # This will cache the base config
+        print(f"✅ MCP config pre-loaded: {list(config.get('mcpServers', {}).keys())}")
+    except Exception as e:
+        print(f"⚠️ MCP config pre-load failed: {e}")
 
 @app.get("/")
 async def root():
