@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Dict, List, Optional
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,7 +10,7 @@ from app.db import AsyncSessionLocal
 from app import models, schemas
 from app.services import meta_service
 
-
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -25,11 +26,48 @@ def _require_user_id(request: Request) -> int:
     return user_id
 
 
-def _format_currency(amount: float) -> str:
-    """Format amount as currency string."""
-    if amount >= 1000:
-        return f"${amount:,.0f}"
-    return f"${amount:,.2f}"
+def _format_currency(amount: float, currency: str = "INR") -> str:
+    """Format amount as currency string based on currency type."""
+    if currency == "INR":
+        if amount >= 100000:  # 1 Lakh+
+            return f"₹{amount/100000:.1f}L"
+        elif amount >= 1000:  # 1K+
+            return f"₹{amount/1000:.1f}K"
+        else:
+            return f"₹{amount:,.0f}"
+    elif currency == "USD":
+        if amount >= 1000:
+            return f"${amount:,.0f}"
+        return f"${amount:,.2f}"
+    else:
+        # Generic formatting for other currencies
+        if amount >= 1000:
+            return f"{amount:,.0f} {currency}"
+        return f"{amount:,.2f} {currency}"
+
+
+async def _get_account_currency(user_id: int, access_token: str, account_id: str) -> str:
+    """Get the currency of the ad account."""
+    try:
+        # Ensure account_id has 'act_' prefix
+        if not account_id.startswith('act_'):
+            account_id = f'act_{account_id}'
+        
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"https://graph.facebook.com/v20.0/{account_id}",
+                params={
+                    "access_token": access_token,
+                    "fields": "currency,account_id,name",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("currency", "USD")
+    except Exception as e:
+        print(f"Error fetching account currency: {e}")
+        return "USD"  # Default fallback
 
 
 def _format_number(num: int | float) -> str:
@@ -37,6 +75,27 @@ def _format_number(num: int | float) -> str:
     return f"{int(num):,}"
 
 
+async def _get_account_currency(user_id: int, access_token: str, account_id: str) -> str:
+    """Get the currency of the ad account."""
+    try:
+        # Ensure account_id has 'act_' prefix
+        if not account_id.startswith('act_'):
+            account_id = f'act_{account_id}'
+        
+        import httpx
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"https://graph.facebook.com/v20.0/{account_id}",
+                params={
+                    "access_token": access_token,
+                    "fields": "currency,account_id,name",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("currency", "USD")
+    except Exception as e:
+        print(f"Error fetching account currency: {e}")
 def _calculate_roi(spend: float, revenue: float) -> str:
     """Calculate ROI percentage."""
     if spend == 0:
@@ -57,8 +116,11 @@ async def _build_stats(
     
     # Default values when Meta is not connected
     if not meta_connected or not access_token or not account_id or not user_id:
-        spend_value = "$0"
+        spend_value = "₹0"
         campaigns_value = "0"
+        impressions_value = "0"
+        reach_value = "0"
+        daily_budget_value = "₹0"
         roi_value = "0%"
         conversions_value = "0"
         spend_change = "0%"
@@ -67,17 +129,48 @@ async def _build_stats(
         conversions_change = "0%"
     else:
         try:
-            # Fetch actual insights using MCP
+            # Get account currency first
+            currency = await _get_account_currency(user_id, access_token, account_id)
+            
+            # Fetch actual insights using direct API with fallback
+            print(f"Fetching insights for user {user_id}, account {account_id}")
             insights = await meta_service.get_account_insights(user_id, access_token, account_id)
             campaigns_data = await meta_service.get_campaigns(user_id, access_token, account_id)
             
-            # Calculate spend
-            spend = float(insights.get("spend", 0))
-            spend_value = _format_currency(spend)
+            print(f"Insights received: {insights}")
+            print(f"Campaigns received: {len(campaigns_data)} campaigns")
             
-            # Count active campaigns
-            active_campaigns = [c for c in campaigns_data if c.get("status") == "ACTIVE"]
+            # Calculate spend with proper currency
+            spend = float(insights.get("spend", 0))
+            spend_value = _format_currency(spend, currency)
+            
+            # Get impressions and reach
+            impressions = int(insights.get("impressions", 0))
+            impressions_value = _format_number(impressions)
+            
+            reach = int(insights.get("reach", 0))
+            reach_value = _format_number(reach)
+            
+            # Count ONLY ACTIVE campaigns
+            active_campaigns = [c for c in campaigns_data if c.get("status", "").upper() == "ACTIVE"]
             campaigns_value = str(len(active_campaigns))
+            print(f"Total campaigns: {len(campaigns_data)}, Active campaigns: {campaigns_value}")
+            
+            # Get campaign budgets for daily budget calculation - ONLY ACTIVE campaigns
+            campaign_budgets = await meta_service.get_campaign_budgets(user_id, access_token, account_id)
+            total_daily_budget = 0
+            active_campaign_ids = [c.get("id") for c in active_campaigns]
+            
+            for budget_info in campaign_budgets:
+                campaign_id = budget_info.get("campaign_id")
+                # Only include budget if campaign is active
+                if campaign_id in active_campaign_ids:
+                    daily_budget = float(budget_info.get("daily_budget", 0) or 0)
+                    # Convert from cents to currency units (Meta API returns in cents)
+                    daily_budget = daily_budget / 100
+                    total_daily_budget += daily_budget
+            
+            daily_budget_value = _format_currency(total_daily_budget, currency)
             
             # Calculate conversions and revenue
             actions = insights.get("actions", []) or []
@@ -104,6 +197,15 @@ async def _build_stats(
             # Calculate ROI (using purchase value as revenue)
             roi_value = _calculate_roi(spend, revenue) if spend > 0 else "0%"
             
+            # Debug logging for verification
+            print(f"🔍 ROI Debug - Account {account_id}:")
+            print(f"   Spend: ₹{spend}")
+            print(f"   Revenue: ₹{revenue}")
+            print(f"   ROI: {roi_value}")
+            print(f"   Actions: {actions}")
+            print(f"   Action Values: {action_values}")
+            print("=" * 50)
+            
             # For changes, we'd need historical data - using placeholder for now
             # In production, you'd compare with previous period
             spend_change = "+0%"
@@ -112,9 +214,13 @@ async def _build_stats(
             conversions_change = "+0%"
             
         except Exception as e:
+            print(f"Error building stats: {e}")
             # Fallback to defaults if API call fails
-            spend_value = "$0"
+            spend_value = "₹0"
             campaigns_value = "0"
+            impressions_value = "0"
+            reach_value = "0"
+            daily_budget_value = "₹0"
             roi_value = "0%"
             conversions_value = "0"
             spend_change = "0%"
@@ -123,8 +229,11 @@ async def _build_stats(
             conversions_change = "0%"
 
     return [
-        {"id": "spend", "title": "Total Spend", "value": spend_value, "change": spend_change, "trend": "up" if spend_change.startswith("+") else "down"},
+        {"id": "spend", "title": "Active Spend", "value": spend_value, "change": spend_change, "trend": "up" if spend_change.startswith("+") else "down"},
         {"id": "campaigns", "title": "Active Campaigns", "value": campaigns_value, "change": campaigns_change, "trend": "up" if campaigns_change.startswith("+") else "down"},
+        {"id": "impressions", "title": "Impressions", "value": impressions_value, "change": "+0%", "trend": "up"},
+        {"id": "reach", "title": "Reach", "value": reach_value, "change": "+0%", "trend": "up"},
+        {"id": "daily_budget", "title": "Active Budget", "value": daily_budget_value, "change": "+0%", "trend": "neutral"},
         {"id": "roi", "title": "Avg. ROI", "value": roi_value, "change": roi_change, "trend": "up" if roi_change.startswith("+") else "down"},
         {"id": "conversions", "title": "Conversions", "value": conversions_value, "change": conversions_change, "trend": "up" if conversions_change.startswith("+") else "down"},
     ]
@@ -144,7 +253,7 @@ async def _build_campaigns(
             {
                 "name": "Connect Meta Ads",
                 "status": "setup",
-                "spend": "$0",
+                "spend": "₹0",
                 "roi": "+0%",
                 "performance": "pending",
                 "message": "Connect your Meta account to start tracking campaigns.",
@@ -156,7 +265,7 @@ async def _build_campaigns(
             {
                 "name": "Select Ad Account",
                 "status": "setup",
-                "spend": "$0",
+                "spend": "₹0",
                 "roi": "+0%",
                 "performance": "pending",
                 "message": "Select an ad account to view campaigns.",
@@ -164,28 +273,62 @@ async def _build_campaigns(
         ]
 
     try:
-        # Fetch actual campaigns and their insights using MCP
+        # Get account currency first
+        currency = await _get_account_currency(user_id, access_token, account_id)
+        
+        # Fetch ALL campaigns, their insights, and budgets using direct API
         campaigns = await meta_service.get_campaigns(user_id, access_token, account_id)
         campaign_insights = await meta_service.get_campaign_insights(user_id, access_token, account_id)
+        campaign_budgets = await meta_service.get_campaign_budgets(user_id, access_token, account_id)
         
-        # Create a lookup for campaign insights by campaign_id
+        print(f"Found {len(campaigns)} total campaigns (all statuses)")
+        print(f"Found {len(campaign_insights)} campaign insights")
+        print(f"Found {len(campaign_budgets)} campaign budgets")
+        
+        # Create lookups for campaign data by campaign_id
         insights_lookup = {}
         for insight in campaign_insights:
             campaign_id = insight.get("campaign_id")
             if campaign_id:
                 insights_lookup[campaign_id] = insight
         
-        # Build campaign list with real data
+        budgets_lookup = {}
+        for budget in campaign_budgets:
+            campaign_id = budget.get("id")
+            if campaign_id:
+                budgets_lookup[campaign_id] = budget
+        
+        # Build campaign list with real data - SHOW ONLY ACTIVE CAMPAIGNS
         campaign_list = []
-        for campaign in campaigns[:10]:  # Limit to 10 campaigns
+        for campaign in campaigns:
             campaign_id = campaign.get("id")
             campaign_name = campaign.get("name", "Unnamed Campaign")
-            status = campaign.get("status", "UNKNOWN").lower()
+            status = campaign.get("status", "UNKNOWN").upper()
+            
+            # Only include ACTIVE campaigns
+            if status != "ACTIVE":
+                continue
             
             # Get insights for this campaign
             insight = insights_lookup.get(campaign_id, {})
             spend = float(insight.get("spend", 0))
-            spend_str = _format_currency(spend)
+            spend_str = _format_currency(spend, currency)
+            
+            # Get impressions and reach for this campaign
+            impressions = int(insight.get("impressions", 0))
+            reach = int(insight.get("reach", 0))
+            
+            # Get budget for this campaign
+            budget_info = budgets_lookup.get(campaign_id, {})
+            daily_budget = float(budget_info.get("daily_budget", 0) or 0)
+            # Convert from cents to currency units (Meta API returns in cents)
+            daily_budget = daily_budget / 100 if daily_budget > 0 else 0
+            daily_budget_str = _format_currency(daily_budget, currency)
+            
+            # Debug logging for this campaign
+            print(f"Campaign {campaign_name}: impressions={impressions}, reach={reach}, daily_budget={daily_budget}")
+            print(f"Insight data: {insight}")
+            print(f"Budget data: {budget_info}")
             
             # Calculate ROI from insights
             actions = insight.get("actions", []) or []
@@ -196,13 +339,14 @@ async def _build_campaigns(
             for action_value in action_values:
                 action_type = action_value.get("action_type", "")
                 value = float(action_value.get("value", 0) or 0)
-                if "purchase" in action_type.lower():
+                if "purchase" in action_type.lower() or "conversion" in action_type.lower():
                     revenue += value
             
             roi_str = _calculate_roi(spend, revenue) if spend > 0 else "0%"
             
-            # Determine performance based on ROI
-            roi_num = float(roi_str.replace("+", "").replace("%", "")) if roi_str.replace("+", "").replace("%", "").replace("-", "").isdigit() else 0
+            # Determine performance based on ROI (no paused status check since all are active)
+            roi_num = float(roi_str.replace("+", "").replace("%", "")) if roi_str.replace("+", "").replace("%", "").replace("-", "").replace(".", "").isdigit() else 0
+            
             if roi_num > 50:
                 performance = "excellent"
             elif roi_num > 0:
@@ -213,23 +357,30 @@ async def _build_campaigns(
                 performance = "poor"
             
             campaign_list.append({
+                "id": campaign_id,
                 "name": campaign_name,
-                "status": status,
+                "status": "active",  # All campaigns in response are active
                 "spend": spend_str,
                 "roi": roi_str,
                 "performance": performance,
+                "impressions": _format_number(impressions) if impressions > 0 else "0",
+                "reach": _format_number(reach) if reach > 0 else "0",
+                "daily_budget": daily_budget_str if daily_budget > 0 else "₹0",
+                "objective": campaign.get("objective", ""),
             })
         
-        # If no campaigns found, return a message
+        print(f"Returning {len(campaign_list)} active campaigns to frontend")
+        
+        # If no active campaigns found, return a message
         if not campaign_list:
             return [
                 {
-                    "name": "No Campaigns Found",
+                    "name": "No Active Campaigns Found",
                     "status": "setup",
-                    "spend": "$0",
+                    "spend": "₹0",
                     "roi": "+0%",
                     "performance": "pending",
-                    "message": "Create your first campaign in Meta Ads Manager.",
+                    "message": "No active campaigns found. Create or activate campaigns in Meta Ads Manager.",
                 }
             ]
         
@@ -241,7 +392,7 @@ async def _build_campaigns(
             {
                 "name": "Error Loading Campaigns",
                 "status": "error",
-                "spend": "$0",
+                "spend": "₹0",
                 "roi": "+0%",
                 "performance": "pending",
                 "message": f"Unable to fetch campaigns. Please try again later.",
@@ -288,7 +439,13 @@ def _build_notifications(business: models.BusinessProfile | None, meta_connected
     return notifications
 
 
-def _build_recommendations(meta_connected: bool, objective: str | None) -> List[Dict]:
+async def _build_recommendations(
+    meta_connected: bool, 
+    objective: str | None,
+    user_id: Optional[int] = None,
+    access_token: Optional[str] = None,
+    account_id: Optional[str] = None,
+) -> List[Dict]:
     suggestions: List[Dict] = []
 
     if not meta_connected:
@@ -296,56 +453,178 @@ def _build_recommendations(meta_connected: bool, objective: str | None) -> List[
             {
                 "id": 1,
                 "title": "Connect Meta Ads",
-                "description": "Securely connect your Meta Ads account to unlock live campaign analytics.",
+                "description": "Securely connect your Meta Ads account to unlock AI-powered campaign analytics and recommendations.",
                 "status": "pending",
                 "campaign": "Account Setup",
                 "action": "connect_meta",
-                "impact": "Enable Smart Insights",
+                "impact": "Enable Smart AI Insights",
             }
         )
         return suggestions
 
-    increase_title = 'Increase Budget for "Summer Sale"'
-    pause_title = 'Pause "Winter Promo" Campaign'
+    if not access_token or not account_id or not user_id:
+        suggestions.append(
+            {
+                "id": 1,
+                "title": "Select Ad Account",
+                "description": "Choose a primary ad account to get personalized AI recommendations with ROI projections.",
+                "status": "pending",
+                "campaign": "Account Setup",
+                "action": "select_account",
+                "impact": "Enable AI-Powered Recommendations",
+            }
+        )
+        return suggestions
 
-    suggestions.append(
-        {
-            "id": 1,
-            "title": increase_title,
-            "description": "High-performing campaign with 145% ROI. Reinvest budget to scale returns.",
-            "status": "pending",
-            "campaign": "Summer Sale",
-            "action": "increase_budget",
-            "impact": "+$450 revenue",
-        }
-    )
+    try:
+        # Fetch actual campaigns and their performance
+        campaigns = await meta_service.get_campaigns(user_id, access_token, account_id)
+        campaign_insights = await meta_service.get_campaign_insights(user_id, access_token, account_id)
+        account_insights = await meta_service.get_account_insights(user_id, access_token, account_id)
+        
+        # Use AI to generate intelligent recommendations
+        from app.services.ai_recommendations import generate_ai_recommendations
+        
+        ai_recommendations = await generate_ai_recommendations(
+            campaigns_data=campaigns,
+            account_insights=account_insights,
+            campaign_insights=campaign_insights,
+            business_objective=objective,
+            account_id=account_id
+        )
+        
+        if ai_recommendations:
+            return ai_recommendations
+        
+        # Fallback to rule-based recommendations if AI fails
+        return await _build_rule_based_recommendations(campaigns, campaign_insights, objective)
+        
+    except Exception as e:
+        logger.error(f"Error building recommendations: {e}")
+        # Fallback recommendations if everything fails
+        return [
+            {
+                "id": 1,
+                "title": "Review Campaign Performance",
+                "description": "Unable to fetch live data. Please review your campaigns manually in Meta Ads Manager.",
+                "status": "pending",
+                "campaign": "All Campaigns",
+                "action": "manual_review",
+                "impact": "Ensure optimal performance",
+            }
+        ]
 
-    suggestions.append(
-        {
-            "id": 2,
-            "title": pause_title,
-            "description": "Detected negative ROI. Pausing now can save spend and reallocate to winners.",
-            "status": "pending",
-            "campaign": "Winter Promo",
-            "action": "pause_campaign",
-            "impact": "Save $150/day",
-        }
-    )
 
+async def _build_rule_based_recommendations(campaigns: List[Dict], campaign_insights: List[Dict], objective: str) -> List[Dict]:
+    """Fallback rule-based recommendations when AI is not available."""
+    suggestions: List[Dict] = []
+    
+    # Create insights lookup
+    insights_lookup = {}
+    for insight in campaign_insights:
+        campaign_id = insight.get("campaign_id")
+        if campaign_id:
+            insights_lookup[campaign_id] = insight
+    
+    suggestion_id = 1
+    
+    # Analyze campaigns for recommendations
+    for campaign in campaigns[:5]:  # Analyze top 5 campaigns
+        campaign_id = campaign.get("id")
+        campaign_name = campaign.get("name", "Unnamed Campaign")
+        status = campaign.get("status", "UNKNOWN")
+        
+        insight = insights_lookup.get(campaign_id, {})
+        spend = float(insight.get("spend", 0))
+        
+        # Calculate ROI
+        actions = insight.get("actions", []) or []
+        action_values = insight.get("action_values", []) or []
+        revenue = 0.0
+        
+        for action_value in action_values:
+            action_type = action_value.get("action_type", "")
+            value = float(action_value.get("value", 0) or 0)
+            if "purchase" in action_type.lower():
+                revenue += value
+        
+        roi = ((revenue - spend) / spend * 100) if spend > 0 else 0
+        
+        # Generate recommendations based on performance
+        if roi > 100 and spend > 50:  # High ROI campaign
+            potential_revenue = spend * 0.5  # Estimate 50% increase
+            suggestions.append(
+                {
+                    "id": suggestion_id,
+                    "title": f'Scale High-Performing "{campaign_name[:30]}..." Campaign',
+                    "description": f"Campaign showing {roi:.0f}% ROI. Increasing budget could scale profitable returns.",
+                    "status": "pending",
+                    "campaign": campaign_name,
+                    "action": "increase_budget",
+                    "impact": f"+${potential_revenue:.0f} potential revenue (Rule-based estimate)",
+                }
+            )
+            suggestion_id += 1
+        
+        elif roi < -20 and spend > 20:  # Poor performing campaign
+            daily_save = spend * 0.1  # Estimate daily savings
+            suggestions.append(
+                {
+                    "id": suggestion_id,
+                    "title": f'Optimize Underperforming "{campaign_name[:30]}..." Campaign',
+                    "description": f"Campaign showing {roi:.0f}% ROI. Consider pausing or optimizing targeting to reduce losses.",
+                    "status": "pending",
+                    "campaign": campaign_name,
+                    "action": "optimize_campaign",
+                    "impact": f"Save ${daily_save:.0f}/day (Rule-based estimate)",
+                }
+            )
+            suggestion_id += 1
+        
+        elif status.upper() == "PAUSED" and roi > 0:  # Paused profitable campaign
+            suggestions.append(
+                {
+                    "id": suggestion_id,
+                    "title": f'Reactivate Profitable "{campaign_name[:30]}..." Campaign',
+                    "description": f"Previously profitable campaign (ROI: {roi:.0f}%) is currently paused.",
+                    "status": "pending",
+                    "campaign": campaign_name,
+                    "action": "reactivate_campaign",
+                    "impact": "Resume profitable traffic",
+                }
+            )
+            suggestion_id += 1
+    
+    # Add objective-based recommendations
     if objective and "lead" in objective.lower():
         suggestions.append(
             {
-                "id": 3,
-                "title": "Switch to Lead Forms",
-                "description": "Goal is lead generation. Use on-platform lead forms to reduce drop-off.",
+                "id": suggestion_id,
+                "title": "Optimize for Lead Generation",
+                "description": "Your goal is lead generation. Consider using Meta's lead forms to reduce friction.",
                 "status": "pending",
-                "campaign": "Lead Magnet",
-                "action": "switch_objective",
-                "impact": "+35% qualified leads",
+                "campaign": "All Campaigns",
+                "action": "optimize_for_leads",
+                "impact": "+25% lead conversion rate (Industry benchmark)",
             }
         )
-
-    return suggestions
+        suggestion_id += 1
+    
+    # If no specific recommendations, add general ones
+    if not suggestions:
+        suggestions.append(
+            {
+                "id": 1,
+                "title": "Campaign Performance Review",
+                "description": "Your campaigns are running. Monitor performance and adjust targeting as needed.",
+                "status": "pending",
+                "campaign": "All Campaigns",
+                "action": "monitor_performance",
+                "impact": "Maintain optimal ROI",
+            }
+        )
+    
+    return suggestions[:3]  # Limit to 3 recommendations
 
 
 @router.get("/", response_model=schemas.DashboardResponse)
@@ -389,7 +668,13 @@ async def get_dashboard_overview(
         selected_ad_account,
     )
     notifications = _build_notifications(business, meta_connected, bool(selected_ad_account))
-    recommendations = _build_recommendations(meta_connected, business.objective if business else None)
+    recommendations = await _build_recommendations(
+        meta_connected, 
+        business.objective if business else None,
+        user_id,
+        access_token,
+        selected_ad_account,
+    )
 
     return {
         "stats": stats,
@@ -423,3 +708,115 @@ async def update_recommendation_status(
         "message": "Status recorded. Persisted storage can be added later.",
     }
 
+
+@router.get("/campaign/{campaign_id}")
+async def get_campaign_details(
+    campaign_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get detailed information for a specific campaign."""
+    user_id = _require_user_id(request)
+
+    # Get user's Meta integration
+    integration_result = await db.execute(
+        select(models.Integration).where(
+            models.Integration.user_id == user_id,
+            models.Integration.provider == "meta",
+        )
+    )
+    integration = integration_result.scalars().first()
+
+    if not integration or not integration.selected_ad_account:
+        raise HTTPException(status_code=400, detail="Meta Ads not connected or no account selected")
+
+    access_token = integration.access_token
+    account_id = integration.selected_ad_account
+
+    try:
+        # Get account currency
+        currency = await _get_account_currency(user_id, access_token, account_id)
+        
+        # Fetch campaign details
+        campaigns = await meta_service.get_campaigns(user_id, access_token, account_id)
+        campaign_insights = await meta_service.get_campaign_insights(user_id, access_token, account_id)
+        campaign_budgets = await meta_service.get_campaign_budgets(user_id, access_token, account_id)
+        
+        # Find the specific campaign
+        campaign = next((c for c in campaigns if c.get("id") == campaign_id), None)
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        
+        # Find insights for this campaign
+        insight = next((i for i in campaign_insights if i.get("campaign_id") == campaign_id), {})
+        
+        # Find budget for this campaign
+        budget_info = next((b for b in campaign_budgets if b.get("id") == campaign_id), {})
+        
+        # Extract detailed metrics
+        spend = float(insight.get("spend", 0))
+        impressions = int(insight.get("impressions", 0))
+        reach = int(insight.get("reach", 0))
+        clicks = int(insight.get("clicks", 0))
+        ctr = float(insight.get("ctr", 0))
+        cpc = float(insight.get("cpc", 0))
+        
+        # Budget information
+        daily_budget = float(budget_info.get("daily_budget", 0) or 0) / 100  # Convert from cents
+        lifetime_budget = float(budget_info.get("lifetime_budget", 0) or 0) / 100
+        budget_remaining = float(budget_info.get("budget_remaining", 0) or 0) / 100
+        
+        # Calculate conversions and revenue
+        actions = insight.get("actions", []) or []
+        action_values = insight.get("action_values", []) or []
+        conversions = 0
+        revenue = 0.0
+        
+        for action in actions:
+            action_type = action.get("action_type", "")
+            value = int(action.get("value", 0) or 0)
+            if any(keyword in action_type.lower() for keyword in ["purchase", "conversion", "lead", "complete_registration"]):
+                conversions += value
+        
+        for action_value in action_values:
+            action_type = action_value.get("action_type", "")
+            value = float(action_value.get("value", 0) or 0)
+            if "purchase" in action_type.lower() or "conversion" in action_type.lower():
+                revenue += value
+        
+        roi = _calculate_roi(spend, revenue) if spend > 0 else "0%"
+        
+        return {
+            "campaign": {
+                "id": campaign_id,
+                "name": campaign.get("name", ""),
+                "status": campaign.get("status", "").lower(),
+                "objective": campaign.get("objective", ""),
+                "created_time": campaign.get("created_time", ""),
+                "updated_time": campaign.get("updated_time", ""),
+            },
+            "performance": {
+                "spend": _format_currency(spend, currency),
+                "impressions": _format_number(impressions),
+                "reach": _format_number(reach),
+                "clicks": _format_number(clicks),
+                "ctr": f"{ctr:.2f}%",
+                "cpc": _format_currency(cpc, currency),
+                "conversions": _format_number(conversions),
+                "revenue": _format_currency(revenue, currency),
+                "roi": roi,
+            },
+            "budget": {
+                "daily_budget": _format_currency(daily_budget, currency) if daily_budget > 0 else "Not set",
+                "lifetime_budget": _format_currency(lifetime_budget, currency) if lifetime_budget > 0 else "Not set",
+                "budget_remaining": _format_currency(budget_remaining, currency) if budget_remaining > 0 else "₹0",
+                "budget_type": "daily" if daily_budget > 0 else "lifetime" if lifetime_budget > 0 else "unknown",
+            },
+            "generatedAt": datetime.utcnow(),
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error fetching campaign details: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch campaign details")

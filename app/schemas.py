@@ -59,11 +59,16 @@ class DashboardStat(BaseModel):
 
 
 class DashboardCampaign(BaseModel):
+    id: Optional[str] = None
     name: str
     status: str
     spend: str
     roi: str
     performance: str
+    impressions: Optional[str] = None
+    reach: Optional[str] = None
+    daily_budget: Optional[str] = None
+    objective: Optional[str] = None
     message: Optional[str] = None
 
 
@@ -108,3 +113,40 @@ class DashboardResponse(BaseModel):
 
 class RecommendationStatusUpdate(BaseModel):
     status: Literal["pending", "approved", "rejected", "applied"]
+
+
+# -------------------------
+# Chat Schemas
+# -------------------------
+
+class ChatMessage(BaseModel):
+    id: int
+    user_id: int
+    session_id: UUID
+    message_type: str  # 'user' or 'assistant'
+    content: str
+    extra_data: Optional[dict] = {}  # Changed from metadata to extra_data
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: Optional[UUID] = None  # If not provided, new session will be created
+
+
+class ChatResponse(BaseModel):
+    success: bool
+    reply: str
+    session_id: UUID
+    message_id: int  # ID of the assistant's response message
+    user_message_id: int  # ID of the user's message
+
+
+class ChatHistoryResponse(BaseModel):
+    messages: List[ChatMessage]
+    session_id: UUID
+    total_messages: int

@@ -57,3 +57,25 @@ class Integration(Base):
     selected_ad_account = Column(Text)
 
     # owner = relationship("Users", back_populates="integrations")
+
+
+class ChatHistory(Base):
+    __tablename__ = "chat_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('Users.id', ondelete="CASCADE"), nullable=False)
+    session_id = Column(UUID(as_uuid=True), default=uuid.uuid4, nullable=False)
+    message_type = Column(String(20), nullable=False)  # 'user' or 'assistant'
+    content = Column(Text, nullable=False)
+    extra_data = Column("metadata", JSONB, default={})  # Use column name mapping
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=text("now()"),
+        nullable=False
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=text("now()"),
+        onupdate=text("now()"),
+        nullable=False
+    )
