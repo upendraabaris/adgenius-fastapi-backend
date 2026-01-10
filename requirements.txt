@@ -9,3 +9,6 @@ passlib[bcrypt]
 mcp-use
 langchain-google-genai
 python-dotenv
+asyncpg
+pydantic[email]
+langchain-aws

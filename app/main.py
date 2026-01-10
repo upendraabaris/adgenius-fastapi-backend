@@ -13,7 +13,7 @@ app = FastAPI(title="AdGenius FastAPI MCP")
 
 frontend_origins = os.getenv(
     "FRONTEND_ORIGINS",
-    "growcommerce.platinum-infotech.com"
+    "growcommerce.platinum-infotech.com,http://localhost:5176"
 ).split(",")
 
 # Add CORS middleware

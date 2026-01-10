@@ -63,7 +63,7 @@ class DashboardCampaign(BaseModel):
     name: str
     status: str
     spend: str
-    roi: str
+    roas: Optional[str] = None
     performance: str
     impressions: Optional[str] = None
     reach: Optional[str] = None

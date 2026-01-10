@@ -8,7 +8,7 @@ def start_oauth():
     params = {
         "client_id": os.getenv("META_APP_ID"),
         "redirect_uri": os.getenv("META_REDIRECT_URI"),
-        "scope": "ads_read,ads_management",
+        "scope": "ads_read",
         "auth_type": "rerequest",
     }
     url = f"https://www.facebook.com/v20.0/dialog/oauth?{urlencode(params)}"
@@ -33,7 +33,7 @@ async def exchange_code_for_token(code: str):
 async def get_ad_accounts(access_token: str):
     async with httpx.AsyncClient() as client:
         resp = await client.get(
-            "https://graph.facebook.com/v20.0/me/adaccounts",
+            "https://graph.facebook.com/v20.0/me/adaccounts?fields=id,name,account_status,currency",
             params={"access_token": access_token},
         )
         resp.raise_for_status()
@@ -140,7 +140,7 @@ async def get_account_insights(user_id: int, access_token: str, account_id: str,
                 f"https://graph.facebook.com/v20.0/{account_id}/insights",
                 params={
                     "access_token": access_token,
-                    "fields": "spend,impressions,clicks,ctr,cpc,actions,action_values,reach,frequency",
+                    "fields": "spend,impressions,clicks,ctr,cpc,actions,action_values,reach,frequency,purchase_roas",
                     "date_preset": date_preset,
                     "level": "account"
                 },
@@ -167,7 +167,7 @@ async def get_campaign_insights(user_id: int, access_token: str, account_id: str
                 f"https://graph.facebook.com/v20.0/{account_id}/insights",
                 params={
                     "access_token": access_token,
-                    "fields": "campaign_id,campaign_name,spend,impressions,clicks,ctr,cpc,actions,action_values,reach,frequency",
+                    "fields": "campaign_id,campaign_name,spend,impressions,clicks,ctr,cpc,actions,action_values,reach,frequency,purchase_roas",
                     "date_preset": date_preset,
                     "level": "campaign"
                 },
