@@ -635,7 +635,7 @@ async def _build_rule_based_recommendations(campaigns: List[Dict], campaign_insi
     return suggestions[:3]  # Limit to 3 recommendations
 
 
-@router.get("/", response_model=schemas.DashboardResponse)
+@router.get("", response_model=schemas.DashboardResponse)
 async def get_dashboard_overview(
     request: Request,
     db: AsyncSession = Depends(get_db),
