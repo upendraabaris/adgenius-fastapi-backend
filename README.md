@@ -1,4 +1,4 @@
-# AdGenius FastAPI + MCP Project (User-specific MCP agents)
+# GrowCommerce FastAPI + MCP Project (User-specific MCP agents)
 
 This project is a scaffold for a FastAPI backend that:
 - Uses SQLite + SQLAlchemy (for simplicity)

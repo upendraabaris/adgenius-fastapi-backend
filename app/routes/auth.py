@@ -94,3 +94,4 @@ async def get_profile(
         "objective": business.objective if business else None,
         "websiteUrl": business.websiteUrl if business else None,
     }
+

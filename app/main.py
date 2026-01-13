@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware  # Import CORSMiddleware
 from app.middleware.auth_middleware import AuthMiddleware  # Import AuthMiddleware
 from app.routes import meta_oauth, oauth_status, settings
 
-app = FastAPI(title="AdGenius FastAPI MCP")
+app = FastAPI(title="GrowCommerce FastAPI MCP")
 
 frontend_origins = os.getenv(
     "FRONTEND_ORIGINS",
@@ -51,4 +51,4 @@ async def startup():
 
 @app.get("/")
 async def root():
-    return {"ok": True, "msg": "AdGenius FastAPI MCP scaffold"}
+    return {"ok": True, "msg": "GrowCommerce FastAPI MCP scaffold"}
