@@ -31,13 +31,80 @@ async def exchange_code_for_token(code: str):
 
 
 async def get_ad_accounts(access_token: str):
+    """Fetch ad accounts from Meta API with all necessary fields including name and currency."""
     async with httpx.AsyncClient() as client:
+        # First, get basic account list
         resp = await client.get(
-            "https://graph.facebook.com/v20.0/me/adaccounts?fields=id,name,account_status,currency",
-            params={"access_token": access_token},
+            "https://graph.facebook.com/v20.0/me/adaccounts",
+            params={
+                "access_token": access_token,
+                "fields": "id,account_id,name,account_status,currency"
+            },
         )
         resp.raise_for_status()
-        return resp.json()["data"]
+        data = resp.json().get("data", [])
+        
+        formatted_accounts = []
+        for account in data:
+            # Handle different response formats from Meta API
+            # Meta API can return 'id' as either numeric or with 'act_' prefix
+            account_id_raw = account.get("id", "")
+            account_id_from_api = account.get("account_id", "")
+            
+            # Normalize account_id - remove act_ prefix if present to get numeric ID
+            numeric_id = account_id_raw.replace("act_", "") if account_id_raw.startswith("act_") else account_id_raw
+            if account_id_from_api and not account_id_from_api.startswith("act_"):
+                numeric_id = account_id_from_api.replace("act_", "") if account_id_from_api.startswith("act_") else account_id_from_api
+            
+            # Format account_id with act_ prefix
+            account_id_formatted = f"act_{numeric_id}" if numeric_id and not numeric_id.startswith("act_") else numeric_id
+            
+            # Get name and currency from initial response
+            name = account.get("name", "")
+            currency = account.get("currency", "")
+            
+            # ALWAYS fetch account details individually to ensure we get name and currency
+            # Meta API /me/adaccounts sometimes doesn't return these fields reliably
+            try:
+                # Use the formatted account_id for API call
+                api_account_id = account_id_formatted
+                account_details_resp = await client.get(
+                    f"https://graph.facebook.com/v20.0/{api_account_id}",
+                    params={
+                        "access_token": access_token,
+                        "fields": "name,currency,account_id,id"
+                    },
+                )
+                account_details_resp.raise_for_status()
+                account_details = account_details_resp.json()
+                
+                # Update name and currency from individual account fetch
+                if account_details.get("name"):
+                    name = account_details.get("name", "")
+                if account_details.get("currency"):
+                    currency = account_details.get("currency", "USD")
+                    
+                print(f"Fetched account details for {api_account_id}: name={name}, currency={currency}")
+            except Exception as e:
+                print(f"Error fetching details for account {account_id_formatted}: {e}")
+                # Use defaults if fetch fails
+                if not currency:
+                    currency = "USD"
+                # If we still don't have name from initial response, try to use account_id as name
+                if not name:
+                    name = f"Account {numeric_id}"
+            
+            # Build formatted account object
+            formatted_account = {
+                "id": numeric_id,  # Keep numeric ID (without act_ prefix) for internal use
+                "account_id": account_id_formatted,  # Formatted account_id with act_ prefix
+                "name": name or "",  # Account name (empty string if not available)
+                "currency": currency or "USD",  # Currency code (default to USD)
+                "account_status": account.get("account_status", ""),  # Account status
+            }
+            formatted_accounts.append(formatted_account)
+        
+        return formatted_accounts
 
 
 async def get_campaigns(user_id: int, access_token: str, account_id: str):

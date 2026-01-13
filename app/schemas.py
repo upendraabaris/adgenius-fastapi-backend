@@ -70,6 +70,7 @@ class DashboardCampaign(BaseModel):
     daily_budget: Optional[str] = None
     objective: Optional[str] = None
     message: Optional[str] = None
+    optimization_tip: Optional[List[str]] = None
 
 
 class DashboardNotification(BaseModel):

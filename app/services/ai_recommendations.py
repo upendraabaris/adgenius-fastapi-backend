@@ -122,14 +122,18 @@ RESPONSE FORMAT (JSON only, no explanation):
   }}
 ]
 
-Focus on:
-- Budget reallocation for high-performing campaigns
-- Pausing or optimizing underperforming campaigns  
-- Audience and targeting improvements
-- Creative optimization opportunities
-- Bidding strategy adjustments
+Focus on Indian market-specific optimizations:
+- Budget allocation considering Indian cost structures (CPC/CPM in ₹)
+- Audience targeting for Indian demographics, languages, and regions
+- Timing optimizations for Indian time zones and peak hours
+- Content localization for Indian audience preferences
+- Festival/seasonal campaign planning for India
+- Platform preferences in India (WhatsApp, Instagram, Facebook usage patterns)
+- Mobile-first optimization for Indian users (high mobile usage)
+- Regional language considerations where applicable
 
-Provide realistic ROI projections based on current performance data.
+Provide realistic ROI projections based on current performance data and Indian market benchmarks.
+All monetary mentions should be in ₹ (Indian Rupees).
 """
 
         # Get AI response

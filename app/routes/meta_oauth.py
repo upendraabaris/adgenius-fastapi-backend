@@ -8,6 +8,7 @@ from app.models import Integration
 from app.config import settings
 from jose import jwt, JWTError
 import os
+from fastapi import FastAPI, Query, HTTPException
 
 router = APIRouter(prefix="/api/meta", tags=["Meta OAuth"])
 
@@ -94,3 +95,39 @@ async def oauth_callback(code: str = None, state: str = None, db: AsyncSession =
     else:
         # Default redirect to onboarding
         return RedirectResponse(f"{frontend}/onboarding?connected=meta", status_code=302)
+
+
+@router.get("/test/ad-accounts")
+async def test_ad_accounts(access_token: str = Query(...)):
+    """Test endpoint to see raw Meta API response and formatted data."""
+    try:
+        import httpx
+        # Get raw response first
+        async with httpx.AsyncClient() as client:
+            raw_resp = await client.get(
+                "https://graph.facebook.com/v20.0/me/adaccounts",
+                params={
+                    "access_token": access_token,
+                    "fields": "id,account_id,name,account_status,currency"
+                },
+            )
+            raw_resp.raise_for_status()
+            raw_data = raw_resp.json().get("data", [])
+        
+        # Get formatted data
+        formatted_data = await get_ad_accounts(access_token)
+        
+        return {
+            "success": True,
+            "raw_count": len(raw_data),
+            "formatted_count": len(formatted_data),
+            "raw_response": raw_data,  # Show what Meta API actually returns
+            "formatted_response": formatted_data,  # Show our formatted data
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }

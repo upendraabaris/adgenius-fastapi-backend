@@ -113,6 +113,209 @@ def _calculate_roas(spend: float, revenue: float) -> str:
     return f"{roas:.2f}x"
 
 
+async def _get_campaign_optimization_recommendation(campaign_data: Dict, insight_data: Dict, business_objective: Optional[str] = None) -> List[str]:
+    """
+    Generate AI-powered optimization recommendations for a single campaign using Claude Haiku.
+    Returns a list of 3-4 specific optimization tips based on campaign's unique performance.
+    """
+    try:
+        from app.services.ai_recommendations import get_ai_llm
+        
+        llm = get_ai_llm()
+        
+        # Extract key metrics
+        spend = float(insight_data.get("spend", 0))
+        impressions = int(insight_data.get("impressions", 0))
+        clicks = int(insight_data.get("clicks", 0))
+        reach = int(insight_data.get("reach", 0))
+        
+        # Get ROAS
+        roas_data = insight_data.get("purchase_roas", [])
+        roas = float(roas_data[0].get("value", 0)) if roas_data else 0
+        
+        # Calculate CTR and other metrics
+        ctr = (clicks / impressions * 100) if impressions > 0 else 0
+        cpc = (spend / clicks) if clicks > 0 else 0
+        frequency = float(insight_data.get("frequency", 0))
+        
+        # Get conversions and revenue
+        actions = insight_data.get("actions", []) or []
+        action_values = insight_data.get("action_values", []) or []
+        conversions = 0
+        revenue = 0.0
+        
+        for action in actions:
+            if "purchase" in action.get("action_type", "").lower():
+                conversions += int(action.get("value", 0))
+        
+        for action_value in action_values:
+            if "purchase" in action_value.get("action_type", "").lower():
+                revenue += float(action_value.get("value", 0))
+        
+        # Calculate additional metrics
+        conversion_rate = (conversions / clicks * 100) if clicks > 0 else 0
+        cost_per_conversion = (spend / conversions) if conversions > 0 else 0
+        
+        # Determine performance issues and strengths
+        performance_analysis = []
+        if roas < 1.0:
+            performance_analysis.append("LOW_ROAS")
+        elif roas > 3.0:
+            performance_analysis.append("HIGH_ROAS")
+        
+        if ctr < 1.0:
+            performance_analysis.append("LOW_CTR")
+        elif ctr > 3.0:
+            performance_analysis.append("HIGH_CTR")
+        
+        if cpc > 2.0:
+            performance_analysis.append("HIGH_CPC")
+        elif cpc < 0.5:
+            performance_analysis.append("LOW_CPC")
+        
+        if frequency > 3.0:
+            performance_analysis.append("HIGH_FREQUENCY")
+        elif frequency < 1.5:
+            performance_analysis.append("LOW_FREQUENCY")
+        
+        if conversion_rate < 1.0:
+            performance_analysis.append("LOW_CONVERSION_RATE")
+        elif conversion_rate > 5.0:
+            performance_analysis.append("HIGH_CONVERSION_RATE")
+
+        prompt = f"""
+You are a Meta Ads expert analyzing campaign "{campaign_data.get('name', 'Unnamed')}". 
+
+CAMPAIGN DETAILS:
+- Name: {campaign_data.get('name', 'Unnamed')}
+- Objective: {campaign_data.get('objective', 'Unknown')}
+- Business Goal: {business_objective or 'Not specified'}
+
+CURRENT PERFORMANCE:
+- Spend: ₹{spend:.2f}
+- ROAS: {roas:.2f}x
+- Revenue: ₹{revenue:.2f}
+- Impressions: {impressions:,}
+- Clicks: {clicks:,}
+- CTR: {ctr:.2f}%
+- CPC: ₹{cpc:.2f}
+- Conversions: {conversions}
+- Conversion Rate: {conversion_rate:.2f}%
+- Cost per Conversion: ₹{cost_per_conversion:.2f}
+- Reach: {reach:,}
+- Frequency: {frequency:.2f}
+
+PERFORMANCE ISSUES DETECTED: {', '.join(performance_analysis) if performance_analysis else 'None'}
+
+Based on THIS SPECIFIC CAMPAIGN'S performance data, provide exactly 3-4 unique optimization recommendations. Each recommendation must be:
+1. Specific to this campaign's actual metrics
+2. Actionable and measurable
+3. Different from generic advice
+4. Max 75 characters each
+
+RESPONSE FORMAT (JSON array only):
+[
+  "Specific recommendation based on actual metrics",
+  "Another unique recommendation for this campaign",
+  "Third specific optimization tip",
+  "Fourth targeted improvement suggestion"
+]
+
+EXAMPLES OF SPECIFIC RECOMMENDATIONS:
+- If ROAS is 0.8x: "Pause campaign and analyze why ROAS is 20% below break-even"
+- If CTR is 0.5%: "Replace ad creative - current CTR of 0.5% is 3x below benchmark"
+- If CPC is ₹3.50: "Refine targeting to reduce ₹3.50 CPC which is 75% above optimal"
+- If frequency is 4.2: "Expand audience - current 4.2 frequency indicates ad fatigue"
+- If conversion rate is 0.3%: "Optimize landing page - 0.3% conversion rate needs improvement"
+
+Focus on the WORST performing metrics first, then suggest improvements for the best opportunities.
+
+Return only the JSON array, no explanations.
+"""
+
+        response = await llm.ainvoke(prompt)
+        ai_content = response.content.strip()
+        
+        # Parse AI response
+        try:
+            import json
+            import re
+            
+            # Extract JSON array from response
+            json_match = re.search(r'\[.*\]', ai_content, re.DOTALL)
+            if json_match:
+                recommendations = json.loads(json_match.group())
+            else:
+                recommendations = json.loads(ai_content)
+            
+            # Ensure we have a list and limit to 4 items
+            if isinstance(recommendations, list) and len(recommendations) > 0:
+                return recommendations[:4]
+            else:
+                raise ValueError("AI response is not a valid list")
+                
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"Failed to parse AI recommendations: {e}")
+            logger.error(f"AI Response: {ai_content}")
+            # Fall through to fallback logic
+        
+    except Exception as e:
+        logger.error(f"Error generating AI recommendations: {e}")
+    
+    # Enhanced fallback recommendations based on specific metrics
+    fallback_recommendations = []
+    
+    # ROAS-specific recommendations
+    if roas < 0.5:
+        fallback_recommendations.append(f"Critical: ROAS {roas:.2f}x is severely low - pause and review targeting")
+        fallback_recommendations.append(f"Analyze why ₹{spend:.0f} spend generated only ₹{revenue:.0f} revenue")
+    elif roas < 1.0:
+        fallback_recommendations.append(f"ROAS {roas:.2f}x below break-even - optimize targeting immediately")
+        fallback_recommendations.append(f"Test new creatives to improve {conversions} conversions from ₹{spend:.0f}")
+    elif roas < 2.0:
+        fallback_recommendations.append(f"ROAS {roas:.2f}x is profitable - test 20% budget increase")
+        fallback_recommendations.append(f"Scale from ₹{spend:.0f} to ₹{spend*1.2:.0f} daily to maximize returns")
+    elif roas >= 3.0:
+        fallback_recommendations.append(f"Excellent {roas:.2f}x ROAS - increase budget by 50% immediately")
+        fallback_recommendations.append(f"Scale this ₹{spend:.0f}/day winner to ₹{spend*1.5:.0f}/day")
+    
+    # CTR-specific recommendations
+    if ctr < 0.8:
+        fallback_recommendations.append(f"CTR {ctr:.2f}% is critically low - replace ad creative urgently")
+    elif ctr < 1.5:
+        fallback_recommendations.append(f"Improve {ctr:.2f}% CTR with better headlines and visuals")
+    elif ctr > 4.0:
+        fallback_recommendations.append(f"Excellent {ctr:.2f}% CTR - focus on conversion optimization")
+    
+    # CPC-specific recommendations  
+    if cpc > 3.0:
+        fallback_recommendations.append(f"High ₹{cpc:.2f} CPC - refine audience to reduce costs")
+    elif cpc < 0.5:
+        fallback_recommendations.append(f"Low ₹{cpc:.2f} CPC indicates good targeting - scale budget")
+    
+    # Frequency-specific recommendations
+    if frequency > 4.0:
+        fallback_recommendations.append(f"Frequency {frequency:.1f} shows ad fatigue - expand audience size")
+    elif frequency < 1.2:
+        fallback_recommendations.append(f"Low {frequency:.1f} frequency - increase budget for more reach")
+    
+    # Conversion-specific recommendations
+    if conversion_rate < 0.5:
+        fallback_recommendations.append(f"Low {conversion_rate:.2f}% conversion rate - optimize landing page")
+    elif conversions == 0:
+        fallback_recommendations.append(f"Zero conversions from {clicks} clicks - check tracking setup")
+    
+    # Ensure we have at least 3 recommendations
+    if len(fallback_recommendations) < 3:
+        fallback_recommendations.extend([
+            f"Monitor {campaign_data.get('name', 'campaign')} performance daily",
+            f"Test new audiences for {campaign_data.get('objective', 'campaign')} objective",
+            f"A/B test ad formats to improve {ctr:.1f}% CTR"
+        ])
+    
+    return fallback_recommendations[:4]
+
+
 async def _build_stats(
     meta_connected: bool,
     business_objective: str | None,
@@ -256,6 +459,11 @@ async def _build_campaigns(
                 "roas": "0.00x",
                 "performance": "pending",
                 "message": "Connect your Meta account to start tracking campaigns.",
+                "optimization_tip": [
+                    "Connect Meta Ads to unlock AI-powered optimization",
+                    "Access real-time campaign performance data",
+                    "Get personalized recommendations for each campaign"
+                ],
             }
         ]
 
@@ -268,6 +476,11 @@ async def _build_campaigns(
                 "roas": "0.00x",
                 "performance": "pending",
                 "message": "Select an ad account to view campaigns.",
+                "optimization_tip": [
+                    "Select your primary ad account for personalized tips",
+                    "Access detailed campaign performance metrics",
+                    "Get AI-powered optimization recommendations"
+                ],
             }
         ]
 
@@ -290,6 +503,11 @@ async def _build_campaigns(
                     "roas": "0.00x",
                     "performance": "pending",
                     "message": "No campaigns found in your ad account. Create campaigns in Meta Ads Manager.",
+                    "optimization_tip": [
+                        "Start with conversion campaigns for better ROI",
+                        "Use detailed targeting based on customer data",
+                        "Set up proper conversion tracking with Meta Pixel"
+                    ],
                 }
             ]
         
@@ -364,6 +582,44 @@ async def _build_campaigns(
             else:
                 performance = "poor"
             
+            # Generate AI optimization recommendations for this campaign
+            try:
+                ai_recommendations = await _get_campaign_optimization_recommendation(
+                    campaign_data=campaign,
+                    insight_data=insight,
+                    business_objective=objective
+                )
+            except Exception as e:
+                # Campaign-specific fallback recommendations based on actual metrics
+                campaign_name = campaign.get('name', 'Campaign')[:20]
+                
+                # Calculate conversions for fallback
+                actions = insight.get("actions", []) or []
+                conversions = 0
+                for action in actions:
+                    if "purchase" in action.get("action_type", "").lower():
+                        conversions += int(action.get("value", 0))
+                
+                if roas_num >= 2.0:
+                    ai_recommendations = [
+                        f"Scale '{campaign_name}' budget by 30% - current {roas_str} ROAS is profitable",
+                        f"Test lookalike audiences for this {roas_str} ROAS performer",
+                        f"Expand targeting while maintaining {roas_str} performance level"
+                    ]
+                elif roas_num >= 1.0:
+                    ai_recommendations = [
+                        f"Optimize '{campaign_name}' creatives to push {roas_str} ROAS above 2.0x",
+                        f"A/B test new audiences to improve {conversions} conversions",
+                        f"Monitor {campaign_name} daily for performance improvements"
+                    ]
+                else:
+                    ctr_val = (clicks / impressions * 100) if impressions > 0 else 0
+                    ai_recommendations = [
+                        f"'{campaign_name}' ROAS {roas_str} needs immediate attention",
+                        f"Review targeting - current CTR {ctr_val:.1f}% may indicate poor fit",
+                        f"Consider pausing {campaign_name} if metrics don't improve in 3 days"
+                    ]
+            
             campaign_list.append({
                 "id": campaign_id,
                 "name": campaign_name,
@@ -375,6 +631,7 @@ async def _build_campaigns(
                 "reach": _format_number(reach) if reach > 0 else "0",
                 "daily_budget": daily_budget_str if daily_budget > 0 else "₹0",
                 "objective": campaign.get("objective", ""),
+                "optimization_tip": ai_recommendations,
             })
         
         # If no active campaigns found, return a message
@@ -387,6 +644,11 @@ async def _build_campaigns(
                     "roas": "0.00x",
                     "performance": "pending",
                     "message": "No active campaigns found. Create or activate campaigns in Meta Ads Manager.",
+                    "optimization_tip": [
+                    "Create your first campaign with clear objectives",
+                    "Target specific audience segments for better results",
+                    "Set realistic daily budgets based on your goals"
+                ],
                 }
             ]
         
@@ -404,6 +666,11 @@ async def _build_campaigns(
                 "roas": "0.00x",
                 "performance": "pending",
                 "message": f"Unable to fetch campaigns: {str(e)}",
+                "optimization_tip": [
+                    "Check your Meta Ads connection and permissions",
+                    "Refresh the page to reload campaign data",
+                    "Contact support if the issue persists"
+                ],
             }
         ]
 
@@ -569,7 +836,7 @@ async def _build_rule_based_recommendations(campaigns: List[Dict], campaign_insi
                     "status": "pending",
                     "campaign": campaign_name,
                     "action": "increase_budget",
-                    "impact": f"+${potential_revenue:.0f} potential revenue (Rule-based estimate)",
+                    "impact": f"+₹{potential_revenue:.0f} potential revenue (Rule-based estimate)",
                 }
             )
             suggestion_id += 1
@@ -584,7 +851,7 @@ async def _build_rule_based_recommendations(campaigns: List[Dict], campaign_insi
                     "status": "pending",
                     "campaign": campaign_name,
                     "action": "optimize_campaign",
-                    "impact": f"Save ${daily_save:.0f}/day (Rule-based estimate)",
+                    "impact": f"Save ₹{daily_save:.0f}/day (Rule-based estimate)",
                 }
             )
             suggestion_id += 1
@@ -635,7 +902,7 @@ async def _build_rule_based_recommendations(campaigns: List[Dict], campaign_insi
     return suggestions[:3]  # Limit to 3 recommendations
 
 
-@router.get("/", response_model=schemas.DashboardResponse)
+@router.get("", response_model=schemas.DashboardResponse)
 async def get_dashboard_overview(
     request: Request,
     db: AsyncSession = Depends(get_db),
