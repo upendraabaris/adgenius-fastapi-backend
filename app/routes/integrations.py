@@ -121,7 +121,7 @@ async def select_meta_account(
 
     # Optional safety: ensure requested account exists
     if integration.ad_accounts:
-        valid_ids = {acct.get("id") for acct in integration.ad_accounts}
+        valid_ids = {acct.get("id") for acct in integration.ad_accounts} | { acct.get("account_id") for acct in integration.ad_accounts}
         if payload.account_id not in valid_ids:
             raise HTTPException(status_code=400, detail="Invalid ad account id")
 
