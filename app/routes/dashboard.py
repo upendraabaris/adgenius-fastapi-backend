@@ -66,7 +66,7 @@ async def _get_account_currency(user_id: int, access_token: str, account_id: str
             data = resp.json()
             return data.get("currency", "USD")
     except Exception as e:
-        print(f"Error fetching account currency: {e}")
+        # print(f"Error fetching account currency: {e}")  # Commented out debug print
         return "USD"  # Default fallback
 
 
@@ -74,28 +74,6 @@ def _format_number(num: int | float) -> str:
     """Format number with commas."""
     return f"{int(num):,}"
 
-
-async def _get_account_currency(user_id: int, access_token: str, account_id: str) -> str:
-    """Get the currency of the ad account."""
-    try:
-        # Ensure account_id has 'act_' prefix
-        if not account_id.startswith('act_'):
-            account_id = f'act_{account_id}'
-        
-        import httpx
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                f"https://graph.facebook.com/v20.0/{account_id}",
-                params={
-                    "access_token": access_token,
-                    "fields": "currency,account_id,name",
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("currency", "USD")
-    except Exception as e:
-        print(f"Error fetching account currency: {e}")
 def _calculate_roi(spend: float, revenue: float) -> str:
     """Calculate ROI percentage."""
     if spend == 0:
@@ -902,6 +880,143 @@ async def _build_rule_based_recommendations(campaigns: List[Dict], campaign_insi
     return suggestions[:3]  # Limit to 3 recommendations
 
 
+@router.get("/stats")
+async def get_dashboard_stats(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get dashboard stats only - for progressive loading."""
+    user_id = _require_user_id(request)
+
+    business_result = await db.execute(
+        select(models.BusinessProfile).where(models.BusinessProfile.userId == user_id)
+    )
+    business = business_result.scalars().first()
+
+    integration_result = await db.execute(
+        select(models.Integration).where(
+            models.Integration.user_id == user_id,
+            models.Integration.provider == "meta",
+        )
+    )
+    integration = integration_result.scalars().first()
+
+    meta_connected = bool(integration)
+    selected_ad_account = integration.selected_ad_account if integration else None
+    access_token = integration.access_token if integration else None
+
+    stats = await _build_stats(
+        meta_connected,
+        business.objective if business else None,
+        user_id,
+        access_token,
+        selected_ad_account,
+    )
+
+    return {"stats": stats, "generatedAt": datetime.utcnow()}
+
+
+@router.get("/campaigns")
+async def get_dashboard_campaigns(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get dashboard campaigns only - for progressive loading."""
+    user_id = _require_user_id(request)
+
+    business_result = await db.execute(
+        select(models.BusinessProfile).where(models.BusinessProfile.userId == user_id)
+    )
+    business = business_result.scalars().first()
+
+    integration_result = await db.execute(
+        select(models.Integration).where(
+            models.Integration.user_id == user_id,
+            models.Integration.provider == "meta",
+        )
+    )
+    integration = integration_result.scalars().first()
+
+    meta_connected = bool(integration)
+    selected_ad_account = integration.selected_ad_account if integration else None
+    access_token = integration.access_token if integration else None
+
+    campaigns = await _build_campaigns(
+        meta_connected,
+        business.objective if business else None,
+        user_id,
+        access_token,
+        selected_ad_account,
+    )
+
+    return {"campaigns": campaigns, "generatedAt": datetime.utcnow()}
+
+
+@router.get("/notifications")
+async def get_dashboard_notifications(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get dashboard notifications only - very fast, no API calls."""
+    user_id = _require_user_id(request)
+
+    business_result = await db.execute(
+        select(models.BusinessProfile).where(models.BusinessProfile.userId == user_id)
+    )
+    business = business_result.scalars().first()
+
+    integration_result = await db.execute(
+        select(models.Integration).where(
+            models.Integration.user_id == user_id,
+            models.Integration.provider == "meta",
+        )
+    )
+    integration = integration_result.scalars().first()
+
+    meta_connected = bool(integration)
+    has_selected_account = bool(integration and integration.selected_ad_account)
+
+    notifications = _build_notifications(business, meta_connected, has_selected_account)
+
+    return {"notifications": notifications, "generatedAt": datetime.utcnow()}
+
+
+@router.get("/recommendations")
+async def get_dashboard_recommendations(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get dashboard recommendations only - can be slow."""
+    user_id = _require_user_id(request)
+
+    business_result = await db.execute(
+        select(models.BusinessProfile).where(models.BusinessProfile.userId == user_id)
+    )
+    business = business_result.scalars().first()
+
+    integration_result = await db.execute(
+        select(models.Integration).where(
+            models.Integration.user_id == user_id,
+            models.Integration.provider == "meta",
+        )
+    )
+    integration = integration_result.scalars().first()
+
+    meta_connected = bool(integration)
+    selected_ad_account = integration.selected_ad_account if integration else None
+    access_token = integration.access_token if integration else None
+
+    recommendations = await _build_recommendations(
+        meta_connected,
+        business.objective if business else None,
+        user_id,
+        access_token,
+        selected_ad_account,
+    )
+
+    return {"aiRecommendations": recommendations, "generatedAt": datetime.utcnow()}
+
+
 @router.get("", response_model=schemas.DashboardResponse)
 async def get_dashboard_overview(
     request: Request,
@@ -927,28 +1042,34 @@ async def get_dashboard_overview(
     ad_account_count = len(integration.ad_accounts or []) if integration else 0
     access_token = integration.access_token if integration else None
 
-    # Fetch actual data from Meta Ads using MCP
-    stats = await _build_stats(
-        meta_connected,
-        business.objective if business else None,
-        user_id,
-        access_token,
-        selected_ad_account,
-    )
-    campaigns = await _build_campaigns(
-        meta_connected,
-        business.objective if business else None,
-        user_id,
-        access_token,
-        selected_ad_account,
-    )
-    notifications = _build_notifications(business, meta_connected, bool(selected_ad_account))
-    recommendations = await _build_recommendations(
-        meta_connected, 
-        business.objective if business else None,
-        user_id,
-        access_token,
-        selected_ad_account,
+    # Helper function to convert sync to async
+    async def _get_notifications():
+        return _build_notifications(business, meta_connected, bool(selected_ad_account))
+    
+    # Call all 4 separate endpoint functions in parallel
+    stats, campaigns, notifications, recommendations = await asyncio.gather(
+        _build_stats(
+            meta_connected,
+            business.objective if business else None,
+            user_id,
+            access_token,
+            selected_ad_account,
+        ),
+        _build_campaigns(
+            meta_connected,
+            business.objective if business else None,
+            user_id,
+            access_token,
+            selected_ad_account,
+        ),
+        _get_notifications(),
+        _build_recommendations(
+            meta_connected,
+            business.objective if business else None,
+            user_id,
+            access_token,
+            selected_ad_account,
+        ),
     )
 
     return {
@@ -1012,10 +1133,12 @@ async def get_campaign_details(
         # Get account currency
         currency = await _get_account_currency(user_id, access_token, account_id)
         
-        # Fetch campaign details
-        campaigns = await meta_service.get_campaigns(user_id, access_token, account_id)
-        campaign_insights = await meta_service.get_campaign_insights(user_id, access_token, account_id)
-        campaign_budgets = await meta_service.get_campaign_budgets(user_id, access_token, account_id)
+        # Fetch campaign details in parallel
+        campaigns, campaign_insights, campaign_budgets = await asyncio.gather(
+            meta_service.get_campaigns(user_id, access_token, account_id),
+            meta_service.get_campaign_insights(user_id, access_token, account_id),
+            meta_service.get_campaign_budgets(user_id, access_token, account_id)
+        )
         
         # Find the specific campaign
         campaign = next((c for c in campaigns if c.get("id") == campaign_id), None)
