@@ -1,10 +1,5 @@
 {
   "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": ["@playwright/mcp@latest"],
-      "env": { "DISPLAY": ":1" }
-    },
     "meta-ads": {
       "command": "npx",
       "args": ["-y", "meta-ads-mcp"],

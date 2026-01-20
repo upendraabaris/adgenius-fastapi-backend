@@ -84,9 +84,10 @@ async def get_ad_accounts(access_token: str):
                 if account_details.get("currency"):
                     currency = account_details.get("currency", "USD")
                     
-                print(f"Fetched account details for {api_account_id}: name={name}, currency={currency}")
+                # print(f"Fetched account details for {api_account_id}: name={name}, currency={currency}")
             except Exception as e:
-                print(f"Error fetching details for account {account_id_formatted}: {e}")
+                # print(f"Error fetching details for account {account_id_formatted}: {e}")
+                pass
                 # Use defaults if fetch fails
                 if not currency:
                     currency = "USD"
@@ -140,7 +141,8 @@ async def get_campaigns(user_id: int, access_token: str, account_id: str):
         return []
         
     except Exception as e:
-        print(f"MCP Error fetching campaigns: {e}")
+        # print(f"MCP Error fetching campaigns: {e}")
+        pass
         # Fallback to direct API call if MCP fails
         try:
             if not account_id.startswith('act_'):
@@ -159,7 +161,7 @@ async def get_campaigns(user_id: int, access_token: str, account_id: str):
                 data = resp.json()
                 return data.get("data", [])
         except Exception as fallback_error:
-            print(f"Fallback API Error: {fallback_error}")
+            # print(f"Fallback API Error: {fallback_error}")
             return []
 
 
@@ -195,7 +197,8 @@ async def get_account_insights(user_id: int, access_token: str, account_id: str,
                     pass
         
     except Exception as e:
-        print(f"MCP Error fetching insights: {e}")
+        # print(f"MCP Error fetching insights: {e}")
+        pass
     
     # Fallback to direct API
     try:
@@ -217,7 +220,7 @@ async def get_account_insights(user_id: int, access_token: str, account_id: str,
             insights_data = data.get("data", [])
             return insights_data[0] if insights_data else {}
     except Exception as fallback_error:
-        print(f"Fallback insights error: {fallback_error}")
+        # print(f"Fallback insights error: {fallback_error}")
         return {}
 
 
@@ -242,10 +245,11 @@ async def get_campaign_insights(user_id: int, access_token: str, account_id: str
             resp.raise_for_status()
             data = resp.json()
             insights = data.get("data", [])
-            print(f"Direct API: Got {len(insights)} campaign insights")
+            # print(f"Direct API: Got {len(insights)} campaign insights")
             return insights
     except Exception as direct_error:
-        print(f"Direct API campaign insights error: {direct_error}")
+        # print(f"Direct API campaign insights error: {direct_error}")
+        pass
     
     # Fallback to MCP if direct API fails
     try:
@@ -267,7 +271,7 @@ async def get_campaign_insights(user_id: int, access_token: str, account_id: str
         if result and isinstance(result, dict):
             insights = result.get("content", [])
             if isinstance(insights, list):
-                print(f"MCP: Got {len(insights)} campaign insights")
+                # print(f"MCP: Got {len(insights)} campaign insights")
                 return insights
             elif isinstance(insights, str):
                 import json
@@ -278,9 +282,10 @@ async def get_campaign_insights(user_id: int, access_token: str, account_id: str
                     pass
         
     except Exception as e:
-        print(f"MCP Error fetching campaign insights: {e}")
+        # print(f"MCP Error fetching campaign insights: {e}")
+        pass
     
-    print("Both direct API and MCP failed for campaign insights")
+    # print("Both direct API and MCP failed for campaign insights")
     return []
 
 async def get_campaign_budgets(user_id: int, access_token: str, account_id: str):
@@ -314,7 +319,8 @@ async def get_campaign_budgets(user_id: int, access_token: str, account_id: str)
                     pass
         
     except Exception as e:
-        print(f"MCP Error fetching campaign budgets: {e}")
+        # print(f"MCP Error fetching campaign budgets: {e}")
+        pass
     
     # Fallback to direct API
     try:
@@ -334,5 +340,5 @@ async def get_campaign_budgets(user_id: int, access_token: str, account_id: str)
             data = resp.json()
             return data.get("data", [])
     except Exception as fallback_error:
-        print(f"Fallback campaign budgets error: {fallback_error}")
+        # print(f"Fallback campaign budgets error: {fallback_error}")
         return []
