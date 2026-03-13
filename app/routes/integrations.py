@@ -6,6 +6,7 @@ from sqlalchemy import update
 from app.db import AsyncSessionLocal
 from app import models
 from app.services.meta_service import get_ad_accounts
+import httpx
 
 router = APIRouter()
 
@@ -21,6 +22,9 @@ def _require_user_id(request: Request) -> int:
 
 class AccountSelection(BaseModel):
     account_id: str
+
+class MetaConnectionPayload(BaseModel):
+    access_token: str
 
 @router.get("/meta/adaccounts")
 async def list_meta_ad_accounts(
@@ -108,28 +112,121 @@ async def select_meta_account(
     db: AsyncSession = Depends(get_db)
 ):
     user_id = _require_user_id(request)
-
-    result = await db.execute(
-        select(models.Integration).where(
-            models.Integration.user_id == user_id,
-            models.Integration.provider == "meta"
+    
+    try:
+        result = await db.execute(
+            select(models.Integration).where(
+                models.Integration.user_id == user_id,
+                models.Integration.provider == "meta"
+            )
         )
-    )
-    integration = result.scalars().first()
-    if not integration:
-        raise HTTPException(status_code=404, detail="Meta integration not found")
+        integration = result.scalars().first()
+        
+        if not integration:
+            raise HTTPException(status_code=404, detail="Meta integration not found")
 
-    # Optional safety: ensure requested account exists
-    if integration.ad_accounts:
-        valid_ids = {acct.get("id") for acct in integration.ad_accounts} | { acct.get("account_id") for acct in integration.ad_accounts}
-        if payload.account_id not in valid_ids:
-            raise HTTPException(status_code=400, detail="Invalid ad account id")
+        print(f"📋 Selecting account {payload.account_id} for user {user_id}")
 
-    await db.execute(
-        update(models.Integration)
-        .where(models.Integration.id == integration.id)
-        .values(selected_ad_account=payload.account_id)
-    )
-    await db.commit()
+        # Validate account ID exists in ad_accounts
+        if integration.ad_accounts:
+            valid_ids = {acct.get("id") for acct in integration.ad_accounts} | {acct.get("account_id") for acct in integration.ad_accounts}
+            
+            if payload.account_id not in valid_ids:
+                print(f"❌ Invalid account ID: {payload.account_id}")
+                print(f"❌ Valid IDs: {valid_ids}")
+                raise HTTPException(status_code=400, detail="Invalid ad account id")
 
-    return {"ok": True, "selectedAccount": payload.account_id}
+        print(f"💾 Updating integration with account: {payload.account_id}")
+        
+        await db.execute(
+            update(models.Integration)
+            .where(models.Integration.id == integration.id)
+            .values(selected_ad_account=payload.account_id)
+        )
+        await db.commit()
+        
+        print(f"✅ Account selected successfully")
+
+        return {"ok": True, "selectedAccount": payload.account_id}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error selecting account: {str(e)}")
+        print(f"❌ Error type: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to select account: {str(e)}")
+
+
+@router.post("/meta/save")
+async def save_meta_connection(
+    request: Request,
+    payload: MetaConnectionPayload,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Save Meta connection from frontend SDK authentication.
+    1. Validate access token with Meta API
+    2. Fetch ad accounts
+    3. Save to database
+    """
+    user_id = _require_user_id(request)
+    
+    try:
+        # Validate token by fetching user info from Meta
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                "https://graph.facebook.com/v20.0/me",
+                params={"access_token": payload.access_token, "fields": "id,name,email"}
+            )
+            resp.raise_for_status()
+            user_info = resp.json()
+            
+        print(f"✅ Meta token validated for user: {user_info.get('name')} (ID: {user_info.get('id')})")
+        
+        # Fetch ad accounts
+        ad_accounts = await get_ad_accounts(payload.access_token)
+        print(f"✅ Fetched {len(ad_accounts)} ad accounts from Meta")
+        
+        # Upsert integration
+        result = await db.execute(
+            select(models.Integration).where(
+                models.Integration.user_id == user_id,
+                models.Integration.provider == "meta"
+            )
+        )
+        integration = result.scalars().first()
+        
+        if integration:
+            print(f"🔄 Updating existing Meta integration for user {user_id}")
+            integration.access_token = payload.access_token
+            integration.ad_accounts = ad_accounts
+        else:
+            print(f"✨ Creating new Meta integration for user {user_id}")
+            integration = models.Integration(
+                user_id=user_id,
+                provider="meta",
+                access_token=payload.access_token,
+                ad_accounts=ad_accounts,
+            )
+            db.add(integration)
+        
+        await db.commit()
+        await db.refresh(integration)
+        
+        return {
+            "success": True,
+            "message": "Meta connection saved successfully",
+            "ad_accounts": ad_accounts,
+            "ad_account_count": len(ad_accounts),
+            "meta_user": user_info
+        }
+        
+    except httpx.HTTPStatusError as e:
+        print(f"❌ Meta API error: {e.response.status_code} - {e.response.text}")
+        raise HTTPException(status_code=400, detail="Invalid access token or Meta API error")
+    except Exception as e:
+        print(f"❌ Error saving Meta connection: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to save connection: {str(e)}")

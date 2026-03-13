@@ -4,7 +4,7 @@ import logging
 from typing import Optional
 from app.config import settings
 from mcp_use import MCPClient, MCPAgent
-# from langchain_google_genai import ChatGoogleGenerativeAI  # Commented out - using Claude instead
+from langchain_google_genai import ChatGoogleGenerativeAI  # Commented out - using Claude instead
 from langchain_aws import ChatBedrock
 
 # Setup logging
@@ -75,21 +75,21 @@ async def create_user_agent(user_id: int, access_token: str) -> MCPAgent:
         
         logger.debug("Creating LLM...")
         # Gemini LLM (commented out)
-        # llm = ChatGoogleGenerativeAI(
-        #     model="gemini-2.5-flash",
-        #     google_api_key=os.getenv("GOOGLE_API_KEY"),
-        #     temperature=0.2,
-        # )
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            google_api_key=os.getenv("GOOGLE_API_KEY"),
+            temperature=0.2,
+        )
         
         # Claude Haiku via AWS Bedrock
-        llm = ChatBedrock(
-            model_id="anthropic.claude-3-haiku-20240307-v1:0",
-            region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
-            model_kwargs={
-                "temperature": 0.2,
-                "max_tokens": 4000
-            }
-        )
+        # llm = ChatBedrock(
+        #     model_id="anthropic.claude-3-haiku-20240307-v1:0",
+        #     region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
+        #     model_kwargs={
+        #         "temperature": 0.2,
+        #         "max_tokens": 4000
+        #     }
+        # )
 
         logger.debug("Creating MCP agent...")
         agent = MCPAgent(
