@@ -12,3 +12,5 @@ python-dotenv
 asyncpg
 pydantic[email]
 langchain-aws
+beautifulsoup4
+requests

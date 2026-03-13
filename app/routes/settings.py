@@ -96,6 +96,31 @@ async def start_meta_oauth_from_settings(request: Request):
     return {"authUrl": oauth_url_with_state}
 
 
+@router.get("/meta/oauth/start-with-config")
+async def start_meta_oauth_with_config_from_settings(request: Request):
+    """Start Meta OAuth flow using Configuration ID from settings page."""
+    user_id = _require_user_id(request)
+
+    # Create state token with user_id and redirect destination
+    state_data = {
+        "id": user_id,
+        "redirect": "settings",  # Indicate this is from settings page
+    }
+    state_token = jwt.encode(state_data, settings.SECRET_KEY, algorithm="HS256")
+
+    # Build OAuth URL with state parameter using Configuration ID
+    from app.services.meta_config_service import start_oauth_with_config
+    base_oauth_url = start_oauth_with_config()["url"]
+    
+    # Add state parameter to the URL (check if URL already has query params)
+    if "?" in base_oauth_url:
+        oauth_url_with_state = f"{base_oauth_url}&state={state_token}"
+    else:
+        oauth_url_with_state = f"{base_oauth_url}?state={state_token}"
+
+    return {"authUrl": oauth_url_with_state}
+
+
 @router.post("/meta/disconnect")
 async def disconnect_meta(
     request: Request,

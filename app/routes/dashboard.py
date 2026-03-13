@@ -91,7 +91,7 @@ def _calculate_roas(spend: float, revenue: float) -> str:
     return f"{roas:.2f}x"
 
 
-async def _get_campaign_optimization_recommendation(campaign_data: Dict, insight_data: Dict, business_objective: Optional[str] = None) -> List[str]:
+async def _get_campaign_optimization_recommendation(campaign_data: Dict, insight_data: Dict, business_objective: Optional[str] = None, website_url: Optional[str] = None) -> List[str]:
     """
     Generate AI-powered optimization recommendations for a single campaign using Claude Haiku.
     Returns a list of 3-4 specific optimization tips based on campaign's unique performance.
@@ -160,9 +160,34 @@ async def _get_campaign_optimization_recommendation(campaign_data: Dict, insight
             performance_analysis.append("LOW_CONVERSION_RATE")
         elif conversion_rate > 5.0:
             performance_analysis.append("HIGH_CONVERSION_RATE")
+        
+        # Fetch website info if URL provided
+        website_info = ""
+        if website_url:
+            try:
+                import requests
+                from bs4 import BeautifulSoup
+                print(f"📄 Fetching website for campaign '{campaign_data.get('name')}': {website_url}")
+                response = requests.get(website_url, timeout=5)
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    title = soup.find('title')
+                    meta_desc = soup.find('meta', attrs={'name': 'description'})
+                    headings = soup.find_all(['h1', 'h2'])[:3]
+                    website_info = f"""
+WEBSITE CONTEXT:
+- Title: {title.text.strip() if title else 'N/A'}
+- Description: {meta_desc.get('content', 'N/A') if meta_desc else 'N/A'}
+- Key Topics: {[h.get_text(strip=True) for h in headings]}
+"""
+            except Exception as e:
+                print(f"⚠️  Could not fetch website info: {e}")
+                website_info = f"\nWEBSITE: {website_url} (Not available)"
 
         prompt = f"""
 You are a Meta Ads expert analyzing campaign "{campaign_data.get('name', 'Unnamed')}". 
+
+{website_info}
 
 CAMPAIGN DETAILS:
 - Name: {campaign_data.get('name', 'Unnamed')}
@@ -425,6 +450,7 @@ async def _build_campaigns(
     user_id: Optional[int] = None,
     access_token: Optional[str] = None,
     account_id: Optional[str] = None,
+    website_url: Optional[str] = None,
 ) -> List[Dict]:
     """Build campaigns list from actual Meta Ads data if available."""
     
@@ -565,7 +591,8 @@ async def _build_campaigns(
                 ai_recommendations = await _get_campaign_optimization_recommendation(
                     campaign_data=campaign,
                     insight_data=insight,
-                    business_objective=objective
+                    business_objective=objective,
+                    website_url=website_url
                 )
             except Exception as e:
                 # Campaign-specific fallback recommendations based on actual metrics
@@ -698,6 +725,7 @@ async def _build_recommendations(
     user_id: Optional[int] = None,
     access_token: Optional[str] = None,
     account_id: Optional[str] = None,
+    website_url: Optional[str] = None,
 ) -> List[Dict]:
     suggestions: List[Dict] = []
 
@@ -743,7 +771,8 @@ async def _build_recommendations(
             account_insights=account_insights,
             campaign_insights=campaign_insights,
             business_objective=objective,
-            account_id=account_id
+            account_id=account_id,
+            website_url=website_url
         )
         
         if ai_recommendations:
@@ -947,6 +976,7 @@ async def get_dashboard_campaigns(
         user_id,
         access_token,
         selected_ad_account,
+        business.websiteUrl if business else None,
     )
 
     return {"campaigns": campaigns, "generatedAt": datetime.utcnow()}
@@ -1012,6 +1042,7 @@ async def get_dashboard_recommendations(
         user_id,
         access_token,
         selected_ad_account,
+        business.websiteUrl if business else None,
     )
 
     return {"aiRecommendations": recommendations, "generatedAt": datetime.utcnow()}
@@ -1061,6 +1092,7 @@ async def get_dashboard_overview(
             user_id,
             access_token,
             selected_ad_account,
+            business.websiteUrl if business else None,
         ),
         _get_notifications(),
         _build_recommendations(
@@ -1069,6 +1101,7 @@ async def get_dashboard_overview(
             user_id,
             access_token,
             selected_ad_account,
+            business.websiteUrl if business else None,
         ),
     )
 

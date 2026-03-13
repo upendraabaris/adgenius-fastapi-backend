@@ -7,7 +7,7 @@ from app.db import init_db
 from app.routes import auth, business, integrations, chat, dashboard
 from fastapi.middleware.cors import CORSMiddleware  # Import CORSMiddleware
 from app.middleware.auth_middleware import AuthMiddleware  # Import AuthMiddleware
-from app.routes import meta_oauth, oauth_status, settings
+from app.routes import meta_oauth, meta_config_oauth, oauth_status, settings
 
 app = FastAPI(title="GrowCommerce FastAPI MCP")
 
@@ -33,6 +33,7 @@ app.include_router(business.router, prefix="/api/business", tags=["business"])
 app.include_router(integrations.router, prefix="/api/integrations", tags=["integrations"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(meta_oauth.router)
+app.include_router(meta_config_oauth.router)
 app.include_router(oauth_status.router)
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(settings.router)

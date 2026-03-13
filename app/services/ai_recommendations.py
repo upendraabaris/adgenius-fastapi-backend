@@ -22,7 +22,8 @@ async def generate_ai_recommendations(
     account_insights: Dict,
     campaign_insights: List[Dict],
     business_objective: Optional[str] = None,
-    account_id: Optional[str] = None
+    account_id: Optional[str] = None,
+    website_url: Optional[str] = None
 ) -> List[Dict]:
     """
     Generate AI-powered recommendations using Claude Haiku.
@@ -31,6 +32,66 @@ async def generate_ai_recommendations(
     """
     try:
         llm = get_ai_llm()
+        
+        # Fetch website content if URL is provided
+        website_content = ""
+        print(f"\n{'='*100}")
+        print(f"🔍 STARTING WEBSITE EXTRACTION")
+        print(f"Website URL: {website_url}")
+        print(f"{'='*100}\n")
+        
+        if website_url:
+            try:
+                import requests
+                from bs4 import BeautifulSoup
+                
+                print(f"⏳ Fetching website: {website_url}")
+                response = requests.get(website_url, timeout=5)
+                print(f"✅ Response Status Code: {response.status_code}")
+                
+                if response.status_code == 200:
+                    print(f"✅ Website fetched successfully!")
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    
+                    # Extract key information
+                    title = soup.find('title')
+                    meta_desc = soup.find('meta', attrs={'name': 'description'})
+                    headings = soup.find_all(['h1', 'h2'])[:5]
+                    
+                    # Extract text from paragraphs (limit to first 1000 chars)
+                    paragraphs = soup.find_all('p')[:5]
+                    text_content = ' '.join([p.get_text(strip=True) for p in paragraphs])[:1000]
+                    
+                    # Print website information to console
+                    print(f"\n{'='*100}")
+                    print(f"🌐 WEBSITE INFORMATION EXTRACTED:")
+                    print(f"{'='*100}")
+                    print(f"URL: {website_url}")
+                    print(f"Title: {title.text.strip() if title else 'N/A'}")
+                    print(f"Meta Description: {meta_desc.get('content', 'N/A') if meta_desc else 'N/A'}")
+                    print(f"Key Headings: {[h.get_text(strip=True) for h in headings]}")
+                    print(f"Content Summary: {text_content}")
+                    print(f"{'='*100}\n")
+                    
+                    website_content = f"""
+WEBSITE INFORMATION:
+- URL: {website_url}
+- Title: {title.text.strip() if title else 'N/A'}
+- Meta Description: {meta_desc.get('content', 'N/A') if meta_desc else 'N/A'}
+- Key Headings: {[h.get_text(strip=True) for h in headings]}
+- Content Summary: {text_content}
+"""
+                else:
+                    print(f"❌ Failed to fetch website. Status Code: {response.status_code}")
+                    
+            except requests.exceptions.Timeout:
+                print(f"⏱️ TIMEOUT: Website request timed out: {website_url}")
+                website_content = f"\nWEBSITE: {website_url} (Request timeout)"
+            except Exception as e:
+                print(f"❌ ERROR fetching website: {e}")
+                website_content = f"\nWEBSITE: {website_url} (Could not fetch: {str(e)[:100]})"
+        else:
+            print(f"⚠️  No website URL provided")
         
         # Prepare data summary for AI analysis
         data_summary = {
@@ -96,7 +157,9 @@ async def generate_ai_recommendations(
         
         # Create AI prompt
         prompt = f"""
-You are an expert Meta Ads consultant. Analyze the following campaign data and provide exactly 3 actionable recommendations.
+You are an expert Meta Ads consultant. Analyze the following campaign data and business website to provide exactly 3 actionable recommendations.
+
+{website_content}
 
 ACCOUNT DATA:
 {json.dumps(data_summary, indent=2)}
@@ -104,8 +167,10 @@ ACCOUNT DATA:
 REQUIREMENTS:
 1. Provide specific, data-driven recommendations
 2. Include ROI impact estimates (be realistic based on current performance)
-3. Focus on the most impactful optimizations
-4. Consider the business objective: {business_objective or 'general performance'}
+3. Focus on the most impactful optimizations aligned with website content
+4. Identify any mismatches between ad messaging and website value propositions
+5. Recommend budget allocation based on products/services shown on website
+6. Consider the business objective: {business_objective or 'general performance'}
 
 RESPONSE FORMAT (JSON only, no explanation):
 [
