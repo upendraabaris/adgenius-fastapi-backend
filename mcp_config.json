@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "meta-ads": {
-      "command": "npx",
-      "args": ["-y", "meta-ads-mcp"],
+      "command": "node",
+      "args": ["/home/ubuntu/2025/meta-mcp/build/src/index.js"],
       "env": {}
     }
   }
