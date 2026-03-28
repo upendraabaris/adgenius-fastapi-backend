@@ -6,6 +6,7 @@ from sqlalchemy import update
 from app.db import AsyncSessionLocal
 from app import models
 from app.services.meta_service import get_ad_accounts
+from app.mcp_utils import create_user_client
 import httpx
 
 router = APIRouter()
@@ -42,6 +43,60 @@ async def list_meta_ad_accounts(
     if not integration or not integration.ad_accounts:
         return {"adAccounts": []}
     return {"adAccounts": integration.ad_accounts}
+
+
+@router.get("/meta/adaccounts/mcp")
+async def list_meta_ad_accounts_mcp(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Return Meta ad accounts using the MCP server tool `get_ad_accounts`.
+    This avoids exposing the raw Meta access token to the frontend.
+    """
+    user_id = _require_user_id(request)
+
+    result = await db.execute(
+        select(models.Integration).where(
+            models.Integration.user_id == user_id,
+            models.Integration.provider == "meta",
+        )
+    )
+    integration = result.scalars().first()
+    if not integration or not integration.access_token:
+        raise HTTPException(status_code=400, detail="Meta integration not found or access token not available")
+
+    try:
+        client = await create_user_client(user_id, integration.access_token)
+        # MCP tool takes no args
+        mcp_result = await client.call_tool("meta-ads", "get_ad_accounts", {})
+
+        # MCP server wraps tool output inside `content[0].text` as JSON string
+        import json
+
+        content = mcp_result.get("content") if isinstance(mcp_result, dict) else None
+        first_text = None
+        if isinstance(content, list) and content:
+            first = content[0]
+            if isinstance(first, dict):
+                first_text = first.get("text")
+
+        if not first_text:
+            raise HTTPException(status_code=500, detail="MCP returned empty ad accounts response")
+
+        # Tool returns JSON in text field on success, and plain error text on failure
+        try:
+            parsed = json.loads(first_text)
+        except json.JSONDecodeError:
+            # If MCP returned error, include tool text as detail
+            raise HTTPException(status_code=500, detail=first_text)
+
+        accounts = parsed.get("accounts", [])
+        return {"success": True, "adAccounts": accounts, "total": len(accounts)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch ad accounts via MCP: {str(e)}")
 
 @router.get("/meta/access-token")
 async def get_meta_access_token(
