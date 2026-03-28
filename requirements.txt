@@ -14,3 +14,4 @@ pydantic[email]
 langchain-aws
 beautifulsoup4
 requests
+razorpay

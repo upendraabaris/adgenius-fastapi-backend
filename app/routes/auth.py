@@ -5,7 +5,7 @@ from sqlalchemy import desc
 from app.db import AsyncSessionLocal
 from app import models, schemas
 from app.utils import security
-from datetime import datetime
+from datetime import datetime, timedelta
 
 router = APIRouter()
 
@@ -38,7 +38,18 @@ async def signup(user: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
     db.add(new)
     await db.commit()
     await db.refresh(new)
-    
+
+    # Auto-assign free trial subscription
+    free_trial = models.Subscription(
+        user_id=new.id,
+        plan="free_trial",
+        status="active",
+        amount=0,
+        expires_at=datetime.utcnow() + timedelta(days=14),
+    )
+    db.add(free_trial)
+    await db.commit()
+
     # Generate a token for the new user
     token = security.create_access_token({"sub": str(new.id)})
     

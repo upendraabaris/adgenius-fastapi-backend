@@ -1,6 +1,6 @@
 from sqlalchemy import (
     Column, Integer, String, Text, ForeignKey,
-    TIMESTAMP, text,DateTime
+    TIMESTAMP, text, DateTime, Boolean
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -16,11 +16,8 @@ class User(Base):
     name = Column(String(255))
     email = Column(String(255), unique=True, index=True)
     passwordHash = Column(String(255))
-    createdAt = Column("createdAt", DateTime(timezone=True), server_default=func.now())  # Default to current timestamp
-    updatedAt = Column("updatedAt", DateTime(timezone=True), server_default=func.now(), onupdate=func.now())  # Auto-update on modification
-
-    # business = relationship("Business", back_populates="owner", uselist=False)
-    # integrations = relationship("Integration", back_populates="owner")
+    createdAt = Column("createdAt", DateTime(timezone=True), server_default=func.now())
+    updatedAt = Column("updatedAt", DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class BusinessProfile(Base):
@@ -33,8 +30,6 @@ class BusinessProfile(Base):
     websiteUrl = Column(String(255))
     createdAt = Column(TIMESTAMP(timezone=True), nullable=False)
     updatedAt = Column(TIMESTAMP(timezone=True), nullable=False)
-
-    # owner = relationship("User", back_populates="business")
 
 
 class Integration(Base):
@@ -56,8 +51,6 @@ class Integration(Base):
     )
     selected_ad_account = Column(Text)
 
-    # owner = relationship("Users", back_populates="integrations")
-
 
 class ChatHistory(Base):
     __tablename__ = "chat_history"
@@ -67,7 +60,7 @@ class ChatHistory(Base):
     session_id = Column(UUID(as_uuid=True), default=uuid.uuid4, nullable=False)
     message_type = Column(String(20), nullable=False)  # 'user' or 'assistant'
     content = Column(Text, nullable=False)
-    extra_data = Column("metadata", JSONB, default={})  # Use column name mapping
+    extra_data = Column("metadata", JSONB, default={})
     created_at = Column(
         TIMESTAMP(timezone=True),
         server_default=text("now()"),
@@ -79,3 +72,21 @@ class ChatHistory(Base):
         onupdate=text("now()"),
         nullable=False
     )
+
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('Users.id', ondelete="CASCADE"), nullable=False)
+    plan = Column(String(50), nullable=False)  # 'free_trial', 'read_only', 'write_access'
+    status = Column(String(20), nullable=False, default="active")  # 'active', 'expired', 'cancelled'
+    razorpay_order_id = Column(String(255))
+    razorpay_payment_id = Column(String(255))
+    razorpay_signature = Column(String(512))
+    amount = Column(Integer)  # in paise
+    currency = Column(String(10), default="INR")
+    starts_at = Column(TIMESTAMP(timezone=True), server_default=text("now()"))
+    expires_at = Column(TIMESTAMP(timezone=True))
+    created_at = Column(TIMESTAMP(timezone=True), server_default=text("now()"))
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=text("now()"), onupdate=text("now()"))

@@ -11,7 +11,7 @@ async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
 
-@router.post("/", response_model=schemas.BusinessCreate)
+@router.post("", response_model=schemas.BusinessCreate)
 async def create_business(
     request: Request,  # Access the request object to get user_id
     b: schemas.BusinessCreate,

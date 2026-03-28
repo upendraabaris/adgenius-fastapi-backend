@@ -90,234 +90,169 @@ def _calculate_roas(spend: float, revenue: float) -> str:
     roas = revenue / spend
     return f"{roas:.2f}x"
 
+async def _get_campaign_optimization_recommendation(
+    campaign_data: Dict,
+    insight_data: Dict,
+    business_objective: Optional[str] = None,
+    website_url: Optional[str] = None
+) -> List[str]:
+    """
+    AI-first recommendation engine (no hardcoded optimization logic)
+    """
 
-async def _get_campaign_optimization_recommendation(campaign_data: Dict, insight_data: Dict, business_objective: Optional[str] = None, website_url: Optional[str] = None) -> List[str]:
-    """
-    Generate AI-powered optimization recommendations for a single campaign using Claude Haiku.
-    Returns a list of 3-4 specific optimization tips based on campaign's unique performance.
-    """
     try:
         from app.services.ai_recommendations import get_ai_llm
-        
         llm = get_ai_llm()
-        
-        # Extract key metrics
+
+        # -------------------------
+        # 📊 RAW METRICS (NO JUDGEMENT)
+        # -------------------------
         spend = float(insight_data.get("spend", 0))
         impressions = int(insight_data.get("impressions", 0))
         clicks = int(insight_data.get("clicks", 0))
         reach = int(insight_data.get("reach", 0))
-        
-        # Get ROAS
+        frequency = float(insight_data.get("frequency", 0))
+
+        # ROAS
         roas_data = insight_data.get("purchase_roas", [])
         roas = float(roas_data[0].get("value", 0)) if roas_data else 0
-        
-        # Calculate CTR and other metrics
-        ctr = (clicks / impressions * 100) if impressions > 0 else 0
-        cpc = (spend / clicks) if clicks > 0 else 0
-        frequency = float(insight_data.get("frequency", 0))
-        
-        # Get conversions and revenue
+
+        # Conversions & Revenue
         actions = insight_data.get("actions", []) or []
         action_values = insight_data.get("action_values", []) or []
+
         conversions = 0
         revenue = 0.0
-        
+
         for action in actions:
             if "purchase" in action.get("action_type", "").lower():
                 conversions += int(action.get("value", 0))
-        
+
         for action_value in action_values:
             if "purchase" in action_value.get("action_type", "").lower():
                 revenue += float(action_value.get("value", 0))
-        
-        # Calculate additional metrics
-        conversion_rate = (conversions / clicks * 100) if clicks > 0 else 0
+
+        # -------------------------
+        # 📈 DERIVED METRICS (CALCULATED ONLY)
+        # -------------------------
+        ctr = (clicks / impressions * 100) if impressions > 0 else 0
+        cpc = (spend / clicks) if clicks > 0 else 0
+
+        # Prefer LPV if available
+        lpv = int(insight_data.get("landing_page_views", 0))
+        if lpv > 0:
+            conversion_rate = (conversions / lpv * 100)
+        else:
+            conversion_rate = (conversions / clicks * 100) if clicks > 0 else 0
+
         cost_per_conversion = (spend / conversions) if conversions > 0 else 0
-        
-        # Determine performance issues and strengths
-        performance_analysis = []
-        if roas < 1.0:
-            performance_analysis.append("LOW_ROAS")
-        elif roas > 3.0:
-            performance_analysis.append("HIGH_ROAS")
-        
-        if ctr < 1.0:
-            performance_analysis.append("LOW_CTR")
-        elif ctr > 3.0:
-            performance_analysis.append("HIGH_CTR")
-        
-        if cpc > 2.0:
-            performance_analysis.append("HIGH_CPC")
-        elif cpc < 0.5:
-            performance_analysis.append("LOW_CPC")
-        
-        if frequency > 3.0:
-            performance_analysis.append("HIGH_FREQUENCY")
-        elif frequency < 1.5:
-            performance_analysis.append("LOW_FREQUENCY")
-        
-        if conversion_rate < 1.0:
-            performance_analysis.append("LOW_CONVERSION_RATE")
-        elif conversion_rate > 5.0:
-            performance_analysis.append("HIGH_CONVERSION_RATE")
-        
-        # Fetch website info if URL provided
+
+        # -------------------------
+        # 🌐 OPTIONAL WEBSITE CONTEXT
+        # -------------------------
         website_info = ""
         if website_url:
             try:
                 import requests
                 from bs4 import BeautifulSoup
-                print(f"📄 Fetching website for campaign '{campaign_data.get('name')}': {website_url}")
+
                 response = requests.get(website_url, timeout=5)
                 if response.status_code == 200:
                     soup = BeautifulSoup(response.text, 'html.parser')
                     title = soup.find('title')
-                    meta_desc = soup.find('meta', attrs={'name': 'description'})
                     headings = soup.find_all(['h1', 'h2'])[:3]
+
                     website_info = f"""
 WEBSITE CONTEXT:
 - Title: {title.text.strip() if title else 'N/A'}
-- Description: {meta_desc.get('content', 'N/A') if meta_desc else 'N/A'}
 - Key Topics: {[h.get_text(strip=True) for h in headings]}
 """
-            except Exception as e:
-                print(f"⚠️  Could not fetch website info: {e}")
-                website_info = f"\nWEBSITE: {website_url} (Not available)"
+            except Exception:
+                website_info = f"\nWEBSITE: {website_url}"
 
+        # -------------------------
+        # 🧠 AI PROMPT (IMPROVED)
+        # -------------------------
         prompt = f"""
-You are a Meta Ads expert analyzing campaign "{campaign_data.get('name', 'Unnamed')}". 
+You are a senior Meta Ads performance marketer.
 
 {website_info}
 
-CAMPAIGN DETAILS:
+CAMPAIGN:
 - Name: {campaign_data.get('name', 'Unnamed')}
 - Objective: {campaign_data.get('objective', 'Unknown')}
-- Business Goal: {business_objective or 'Not specified'}
+- Funnel Stage: MOF (Middle of Funnel - warm audience)
 
-CURRENT PERFORMANCE:
+PERFORMANCE DATA:
 - Spend: ₹{spend:.2f}
-- ROAS: {roas:.2f}x
 - Revenue: ₹{revenue:.2f}
-- Impressions: {impressions:,}
-- Clicks: {clicks:,}
+- ROAS: {roas:.2f}x
+- Impressions: {impressions}
+- Clicks: {clicks}
 - CTR: {ctr:.2f}%
 - CPC: ₹{cpc:.2f}
 - Conversions: {conversions}
 - Conversion Rate: {conversion_rate:.2f}%
-- Cost per Conversion: ₹{cost_per_conversion:.2f}
-- Reach: {reach:,}
+- Cost/Conversion: ₹{cost_per_conversion:.2f}
+- Reach: {reach}
 - Frequency: {frequency:.2f}
 
-PERFORMANCE ISSUES DETECTED: {', '.join(performance_analysis) if performance_analysis else 'None'}
+INDUSTRY BENCHMARKS (India E-commerce):
+- Good CTR: 2–5%
+- Good CPC: ₹3–₹10
+- Good Conversion Rate: 2–5%
+- Good ROAS: 3x+
 
-Based on THIS SPECIFIC CAMPAIGN'S performance data, provide exactly 3-4 unique optimization recommendations. Each recommendation must be:
-1. Specific to this campaign's actual metrics
-2. Actionable and measurable
-3. Different from generic advice
-4. Max 75 characters each
+IMPORTANT RULES:
+- Do NOT give generic advice
+- Do NOT suggest improving metrics already good
+- Focus on the biggest bottleneck affecting ROAS
+- If traffic is good → focus on conversion/AOV
+- If conversion rate is good but ROAS is low → suggest AOV/offer fixes
+- If everything is strong → suggest scaling strategy
 
-RESPONSE FORMAT (JSON array only):
-[
-  "Specific recommendation based on actual metrics",
-  "Another unique recommendation for this campaign",
-  "Third specific optimization tip",
-  "Fourth targeted improvement suggestion"
-]
+OUTPUT:
+Return ONLY a JSON array with 3–4 recommendations.
 
-EXAMPLES OF SPECIFIC RECOMMENDATIONS:
-- If ROAS is 0.8x: "Pause campaign and analyze why ROAS is 20% below break-even"
-- If CTR is 0.5%: "Replace ad creative - current CTR of 0.5% is 3x below benchmark"
-- If CPC is ₹3.50: "Refine targeting to reduce ₹3.50 CPC which is 75% above optimal"
-- If frequency is 4.2: "Expand audience - current 4.2 frequency indicates ad fatigue"
-- If conversion rate is 0.3%: "Optimize landing page - 0.3% conversion rate needs improvement"
+Each recommendation must:
+- Include at least one metric value
+- Be actionable
+- Max 15 words
 
-Focus on the WORST performing metrics first, then suggest improvements for the best opportunities.
-
-Return only the JSON array, no explanations.
+Example:
+"ROAS 2.2x below 3x benchmark – test bundle offers to increase AOV"
 """
 
+        # -------------------------
+        # 🤖 CALL AI
+        # -------------------------
         response = await llm.ainvoke(prompt)
         ai_content = response.content.strip()
-        
-        # Parse AI response
-        try:
-            import json
-            import re
-            
-            # Extract JSON array from response
-            json_match = re.search(r'\[.*\]', ai_content, re.DOTALL)
-            if json_match:
-                recommendations = json.loads(json_match.group())
-            else:
-                recommendations = json.loads(ai_content)
-            
-            # Ensure we have a list and limit to 4 items
-            if isinstance(recommendations, list) and len(recommendations) > 0:
-                return recommendations[:4]
-            else:
-                raise ValueError("AI response is not a valid list")
-                
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.error(f"Failed to parse AI recommendations: {e}")
-            logger.error(f"AI Response: {ai_content}")
-            # Fall through to fallback logic
-        
-    except Exception as e:
-        logger.error(f"Error generating AI recommendations: {e}")
-    
-    # Enhanced fallback recommendations based on specific metrics
-    fallback_recommendations = []
-    
-    # ROAS-specific recommendations
-    if roas < 0.5:
-        fallback_recommendations.append(f"Critical: ROAS {roas:.2f}x is severely low - pause and review targeting")
-        fallback_recommendations.append(f"Analyze why ₹{spend:.0f} spend generated only ₹{revenue:.0f} revenue")
-    elif roas < 1.0:
-        fallback_recommendations.append(f"ROAS {roas:.2f}x below break-even - optimize targeting immediately")
-        fallback_recommendations.append(f"Test new creatives to improve {conversions} conversions from ₹{spend:.0f}")
-    elif roas < 2.0:
-        fallback_recommendations.append(f"ROAS {roas:.2f}x is profitable - test 20% budget increase")
-        fallback_recommendations.append(f"Scale from ₹{spend:.0f} to ₹{spend*1.2:.0f} daily to maximize returns")
-    elif roas >= 3.0:
-        fallback_recommendations.append(f"Excellent {roas:.2f}x ROAS - increase budget by 50% immediately")
-        fallback_recommendations.append(f"Scale this ₹{spend:.0f}/day winner to ₹{spend*1.5:.0f}/day")
-    
-    # CTR-specific recommendations
-    if ctr < 0.8:
-        fallback_recommendations.append(f"CTR {ctr:.2f}% is critically low - replace ad creative urgently")
-    elif ctr < 1.5:
-        fallback_recommendations.append(f"Improve {ctr:.2f}% CTR with better headlines and visuals")
-    elif ctr > 4.0:
-        fallback_recommendations.append(f"Excellent {ctr:.2f}% CTR - focus on conversion optimization")
-    
-    # CPC-specific recommendations  
-    if cpc > 3.0:
-        fallback_recommendations.append(f"High ₹{cpc:.2f} CPC - refine audience to reduce costs")
-    elif cpc < 0.5:
-        fallback_recommendations.append(f"Low ₹{cpc:.2f} CPC indicates good targeting - scale budget")
-    
-    # Frequency-specific recommendations
-    if frequency > 4.0:
-        fallback_recommendations.append(f"Frequency {frequency:.1f} shows ad fatigue - expand audience size")
-    elif frequency < 1.2:
-        fallback_recommendations.append(f"Low {frequency:.1f} frequency - increase budget for more reach")
-    
-    # Conversion-specific recommendations
-    if conversion_rate < 0.5:
-        fallback_recommendations.append(f"Low {conversion_rate:.2f}% conversion rate - optimize landing page")
-    elif conversions == 0:
-        fallback_recommendations.append(f"Zero conversions from {clicks} clicks - check tracking setup")
-    
-    # Ensure we have at least 3 recommendations
-    if len(fallback_recommendations) < 3:
-        fallback_recommendations.extend([
-            f"Monitor {campaign_data.get('name', 'campaign')} performance daily",
-            f"Test new audiences for {campaign_data.get('objective', 'campaign')} objective",
-            f"A/B test ad formats to improve {ctr:.1f}% CTR"
-        ])
-    
-    return fallback_recommendations[:4]
 
+        import json, re
+
+        json_match = re.search(r'\[.*\]', ai_content, re.DOTALL)
+        if json_match:
+            recommendations = json.loads(json_match.group())
+        else:
+            recommendations = json.loads(ai_content)
+
+        if isinstance(recommendations, list) and len(recommendations) > 0:
+            return recommendations[:4]
+
+        raise ValueError("Invalid AI response")
+
+    except Exception as e:
+        print(f"AI Error: {e}")
+
+        # -------------------------
+        # 🔄 SMART FALLBACK (MINIMAL)
+        # -------------------------
+        return [
+            f"ROAS {roas:.2f}x – test new offers to improve profitability",
+            f"CTR {ctr:.2f}% & CPC ₹{cpc:.2f} – traffic is efficient",
+            f"Improve AOV to scale beyond current performance"
+        ]
 
 async def _build_stats(
     meta_connected: bool,

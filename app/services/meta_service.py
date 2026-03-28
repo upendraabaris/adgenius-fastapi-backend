@@ -8,8 +8,9 @@ def start_oauth():
     params = {
         "client_id": os.getenv("META_APP_ID"),
         "redirect_uri": os.getenv("META_REDIRECT_URI"),
-        "scope": "ads_read",
+        "scope": "ads_read,ads_management,pages_show_list,pages_read_engagement",
         "auth_type": "rerequest",
+        "display": "popup",
     }
     url = f"https://www.facebook.com/v20.0/dialog/oauth?{urlencode(params)}"
     return {"url": url}

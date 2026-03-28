@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app.db import init_db
-from app.routes import auth, business, integrations, chat, dashboard
+from app.routes import auth, business, integrations, chat, dashboard, payments
 from fastapi.middleware.cors import CORSMiddleware  # Import CORSMiddleware
 from app.middleware.auth_middleware import AuthMiddleware  # Import AuthMiddleware
 from app.routes import meta_oauth, meta_config_oauth, oauth_status, settings
@@ -37,6 +37,7 @@ app.include_router(meta_config_oauth.router)
 app.include_router(oauth_status.router)
 app.include_router(dashboard.router, prefix="/api/dashboard", tags=["dashboard"])
 app.include_router(settings.router)
+app.include_router(payments.router, tags=["payments"])
 
 @app.on_event("startup")
 async def startup():
