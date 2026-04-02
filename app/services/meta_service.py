@@ -462,3 +462,31 @@ async def update_adset_configuration(user_id: int, access_token: str, adset_id: 
                 
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+async def get_adset_configuration(user_id: int, access_token: str, adset_id: str):
+    """
+    Fetch the raw configuration for a single ad set (budget, targeting, etc.)
+    Specifically for snapshotting BEFORE optimization.
+    """
+    try:
+        if not adset_id:
+            return None
+            
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"https://graph.facebook.com/v20.0/{adset_id}",
+                params={
+                    "access_token": access_token,
+                    "fields": "daily_budget,lifetime_budget,targeting,status,name"
+                },
+            )
+            data = resp.json()
+            if "error" in data:
+                logger.error(f"Error fetching adset config for backup: {data['error']}")
+                return None
+                
+            return data
+    except Exception as e:
+        logger.error(f"Exception in get_adset_configuration: {e}")
+        return None

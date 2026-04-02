@@ -90,3 +90,32 @@ class Subscription(Base):
     expires_at = Column(TIMESTAMP(timezone=True))
     created_at = Column(TIMESTAMP(timezone=True), server_default=text("now()"))
     updated_at = Column(TIMESTAMP(timezone=True), server_default=text("now()"), onupdate=text("now()"))
+
+
+class OptimizationHistory(Base):
+    __tablename__ = "optimization_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey('Users.id', ondelete="CASCADE"), nullable=False)
+    campaign_id = Column(String(255), nullable=False)
+    adset_id = Column(String(255), nullable=False)
+    
+    # Store JSON snapshots of configurations
+    before_config = Column(JSONB, nullable=False)
+    after_config = Column(JSONB)
+    strategy_tips = Column(JSONB)  # List of tips applied in this batch
+    
+    status = Column(String(50), default="pending")  # 'applied', 'failed', 'restored', 'pending'
+    error_message = Column(Text)
+    
+    created_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=text("now()"),
+        nullable=False
+    )
+    updated_at = Column(
+        TIMESTAMP(timezone=True),
+        server_default=text("now()"),
+        onupdate=text("now()"),
+        nullable=False
+    )
