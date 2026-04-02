@@ -12,7 +12,7 @@ def get_ai_llm():
         model_id="anthropic.claude-3-haiku-20240307-v1:0",
         region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
         model_kwargs={
-            "temperature": 0.2,
+            "temperature": 0.0,
             "max_tokens": 4000
         }
     )
@@ -300,3 +300,247 @@ Provide specific optimization suggestions in JSON format:
             "bidding_strategy": "Monitor current strategy",
             "roi_projection": "Data analysis needed"
         }
+
+async def generate_account_audit_report(
+    account_insights: Dict,
+    campaign_insights: List[Dict],
+    audience_breakdowns: List[Dict],
+    business_objective: Optional[str] = None
+) -> str:
+    """
+    Generate a professional Markdown-formatted Meta Ads Account Audit.
+    """
+    try:
+        llm = get_ai_llm()
+        
+        # Helper to extract ROAS
+        def extract_roas(insight: Dict) -> float:
+            roas_list = insight.get("purchase_roas", []) or []
+            if roas_list and len(roas_list) > 0:
+                return float(roas_list[0].get("value", 0))
+            # Fallback calculation if spend and revenue are available
+            return 0.0
+
+        # Helper to extract conversions
+        def extract_conversions(insight: Dict) -> int:
+            actions = insight.get("actions", []) or []
+            conversions = 0
+            for action in actions:
+                action_type = action.get("action_type", "")
+                if any(keyword in action_type.lower() for keyword in ["purchase", "conversion", "lead", "complete_registration"]):
+                    conversions += int(action.get("value", 0))
+            return conversions
+
+        # Prepare a rich data summary for the AI
+        acct_conversions = extract_conversions(account_insights)
+        acct_spend = float(account_insights.get("spend", 0))
+        
+        data_summary = {
+            "account_overview": {
+                "spend": acct_spend,
+                "impressions": int(account_insights.get("impressions", 0)),
+                "clicks": int(account_insights.get("clicks", 0)),
+                "ctr": float(account_insights.get("ctr", 0)),
+                "cpc": float(account_insights.get("cpc", 0)),
+                "roas": extract_roas(account_insights),
+                "conversions": acct_conversions,
+                "cpr": (acct_spend / acct_conversions) if acct_conversions > 0 else 0
+            },
+            "campaign_performance": [],
+            "audience_winners": audience_breakdowns,
+            "objective": business_objective or "Maximize ROI"
+        }
+        
+        for insight in campaign_insights[:5]:  # Focus on top 5
+            camp_spend = float(insight.get("spend", 0))
+            camp_conversions = extract_conversions(insight)
+            data_summary["campaign_performance"].append({
+                "name": insight.get("campaign_name", "Unknown"),
+                "spend": camp_spend,
+                "roas": extract_roas(insight),
+                "conversions": camp_conversions,
+                "cpr": (camp_spend / camp_conversions) if camp_conversions > 0 else 0
+            })
+            
+        prompt = f"""
+        You are a Senior Meta Ads Consultant at **GrowCommerce**, a top-tier digital growth agency.
+        Generate a professional, deep-dive "GrowCommerce Executive Audit Report" for the following Meta Ads account data.
+        
+        DATA:
+        {json.dumps(data_summary, indent=2)}
+        
+        REPORT REQUIREMENTS:
+        1. Tone: Professional, authoritative, and data-driven.
+        2. Format: Use clean Markdown (headings, tables, bold text, bullet points). **IMPORTANT: Ensure Markdown tables have a proper header row and use newlines between every row. Do not put multiple table rows on the same line.**
+        3. Language: English (with currency references in ₹ if applicable).
+        4. Focus on the last 30 days of performance.
+        
+        SECTIONS TO INCLUDE:
+        - ✨ **Executive Summary**: A 2-3 sentence high-level overview of account health.
+        - 🚀 **Scalability Analysis**: Identify which campaigns are ready to be scaled and why (based on ROAS and Efficiency).
+        - 🎯 **Targeting Efficiency**: Analyze the Audience Winners. Who is converting cheapest? Who is wasting budget?
+        - 📉 **Budget Leakage**: Where is money being spent without return?
+        - 🔮 **30-Day Forecast**: If recommendations are applied, what is the conservative growth projection?
+        - ✅ **High-Impact Checklist**: Exactly 5 bullet points of next steps.
+        
+        Output only the Markdown report content following this EXACT structure:
+        
+        # GrowCommerce Executive Audit Report
+        
+        ## ✨ Executive Summary
+        [2-3 sentences of high-level overview]
+        
+        ## 🚀 Scalability Analysis
+        [Identify top candidates for scaling in a Markdown table with Name, ROAS, and CPR columns]
+        
+        ## 🎯 Targeting Efficiency
+        ### Winners
+        [Bullet points of best performing segments]
+        ### Wastage
+        [Bullet points of segments with high spend but low return]
+        
+        ## 📉 Budget Leakage
+        [Specific findings on where budget is being lost]
+        
+        ## 🔮 30-Day Performance Forecast
+        [A table or list showing conservative vs optimistic growth if recommendations are followed]
+        
+        ## ✅ GrowCommerce Checklist
+        [Exactly 5 actionable bullet points for next steps]
+        
+        **CONFIDENTIAL | Generated by GrowCommerce Strategy Team**
+        """
+        
+        response = await llm.ainvoke(prompt)
+        return response.content
+        
+    except Exception as e:        return "# AI Audit Report\n\nUnable to generate report at this time. Please check your data connection and try again later."
+
+async def generate_campaign_mini_audit(
+    campaign_name: str,
+    spend: float,
+    roas: float,
+    conversions: int,
+    cpr: float,
+    ctr: float,
+    breakdowns: Dict,
+    business_objective: Optional[str] = None
+) -> List[str]:
+    """
+    Generate professional, agency-grade audit bullets for a single campaign using LLM.
+    Acts as a Senior Meta Ads Consultant at GrowCommerce.
+    """
+    try:
+        llm = get_ai_llm()
+        
+        data_summary = {
+            "campaign_name": campaign_name,
+            "metrics": {
+                "spend": spend,
+                "roas": roas,
+                "conversions": conversions,
+                "cpr": cpr,
+                "ctr": ctr
+            },
+            "audience_data": breakdowns,
+            "objective": business_objective or "Maximize ROI"
+        }
+        
+        # [DEBUG] Print raw data to console for verification
+        print(f"\n{'='*20} RAW DATA START: {campaign_name} {'='*20}")
+        print(json.dumps(data_summary, indent=2))
+        print(f"{'='*20} RAW DATA END {'='*20}\n")
+        
+        prompt = f"""
+        You are a Senior Meta Ads Consultant at **GrowCommerce**, a world-class performance marketing agency.
+        Your goal is to provide a high-authority, technical "Executive Audit" for the following campaign data.
+        
+        CAMPAIGN DATA:
+        {json.dumps(data_summary, indent=2)}
+        
+        INSTRUCTIONS:
+        1. Tone: Deeply analytical, authoritative, and data-backed (Senior Meta Ads Strategist).
+        2. Format: Return exactly 6 highly professional bullet points as a JSON list of strings.
+        3. Content Structure: 
+           - Bullet 1 (✨ Demographic Winner): Identify the best age/gender segments.
+           - Bullet 2 (⚠️ Demographic Wastage): Identify underperforming age/gender segments.
+           - Bullet 3 (🌍 Geographic Audit): Identify top-performing Regions/States (e.g., "Chandigarh", "Delhi").
+           - Bullet 4 (📍 Regional Wastage): Identify states or regions with high CPR and low efficiency.
+           - Bullet 5 (🎯 Targeting Roadmap): Explicit "Expand/Exclude" instructions for demographics.
+           - Bullet 6 (🚀 Scaling Action): Specific budget or bidding next step for the whole campaign.
+        4. Style: Use exact names from the breakdown data (e.g., "Delhi", "25-34 female").
+        5. Currency: All monetary values in ₹ (Indian Rupees).
+        
+        RESPONSE FORMAT (JSON only):
+        ["bullet 1", "bullet 2", "bullet 3", "bullet 4", "bullet 5", "bullet 6"]
+        """
+        
+        response = await llm.ainvoke(prompt)
+        content = response.content
+        
+        # Clean and parse JSON
+        import re
+        json_match = re.search(r'\[.*\]', content, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group())
+        return json.loads(content)
+        
+    except Exception as e:
+        logger.error(f"Error generating high-authority campaign audit: {e}")
+        # Rule-based professional fallback if AI fails
+        return [
+            f"✨ **Winner Insight**: The campaign is maintaining a foundational {roas:.2f}x ROAS with {conversions} verified conversions.",
+            "⚠️ **Wastage Warning**: Monitor high-frequency segments where CTR is trailing the account average to prevent budget fatigue.",
+            f"🚀 **Scaling Strategy**: Prioritize budget consolidation into your top-performing 20% audience segments to boost capital efficiency."
+        ]
+
+
+async def translate_strategy_to_params(selected_tips: List[str], current_configuration: Dict) -> Dict:
+    """
+    Translate textual AI strategy tips into structured Meta API parameters.
+    Uses LLM to map natural language to specific targeting/budget fields.
+    """
+    try:
+        llm = get_ai_llm()
+        
+        prompt = f"""
+        You are a Technical Ad Ops specialist at **GrowCommerce**. 
+        Translate the following textual growth strategies into a valid JSON object for the Meta Ads API.
+        
+        STRATEGIES TO APPLY:
+        {json.dumps(selected_tips, indent=2)}
+        
+        CURRENT AD SET CONFIGURATION (for reference):
+        {json.dumps(current_configuration, indent=2)}
+        
+        REQUIREMENTS:
+        1. Output ONLY a valid JSON object containing the keys to be updated.
+        2. Supported keys: `daily_budget`, `targeting`.
+        3. For `targeting`, include fields like `age_min`, `age_max`, `genders`, `geo_locations`.
+        4. If a tip says "Focus on 25-34", update `age_min: 25` and `age_max: 34`.
+        5. If a tip says "Exclude 65+", ensure the range doesn't include 65.
+        6. For Budget: If it says "Increase budget by 20%", calculate the value based on `daily_budget` in the current config.
+        7. Maintain all other targeting settings unless explicitly told to change them.
+        
+        RESPONSE FORMAT:
+        {{
+            "targeting": {{ ... }},
+            "daily_budget": 1234
+        }}
+        
+        (Return ONLY the JSON object, no explanation)
+        """
+        
+        response = await llm.ainvoke(prompt)
+        content = response.content
+        
+        # Clean and parse JSON
+        import re
+        json_match = re.search(r'\{.*\}', content, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group())
+        return json.loads(content)
+        
+    except Exception as e:
+        logger.error(f"Error translating strategy to params: {e}")
+        return {}

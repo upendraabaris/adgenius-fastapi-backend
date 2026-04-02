@@ -1,7 +1,11 @@
 import os
 import httpx
+import logging
+import json
 from urllib.parse import urlencode
 from app.mcp_utils import create_user_client
+
+logger = logging.getLogger(__name__)
 
 
 def start_oauth():
@@ -119,12 +123,15 @@ async def get_campaigns(user_id: int, access_token: str, account_id: str):
         if not account_id.startswith('act_'):
             account_id = f'act_{account_id}'
         
+        print(f"get_campaign tool called")
+
         # Call MCP tool directly
         result = await client.call_tool(
             "meta-ads",
             "get_campaigns", 
-            {"account_id": account_id}
-        )
+            {"account_id": account_id})
+
+        print(f"Tool called End")
         
         if result and isinstance(result, dict):
             campaigns = result.get("content", [])
@@ -238,7 +245,7 @@ async def get_campaign_insights(user_id: int, access_token: str, account_id: str
                 f"https://graph.facebook.com/v20.0/{account_id}/insights",
                 params={
                     "access_token": access_token,
-                    "fields": "campaign_id,campaign_name,spend,impressions,clicks,ctr,cpc,actions,action_values,reach,frequency,purchase_roas",
+                    "fields": "campaign_id,campaign_name,spend,impressions,clicks,ctr,cpc,reach,frequency,purchase_roas,actions,action_values",
                     "date_preset": date_preset,
                     "level": "campaign"
                 },
@@ -343,3 +350,115 @@ async def get_campaign_budgets(user_id: int, access_token: str, account_id: str)
     except Exception as fallback_error:
         # print(f"Fallback campaign budgets error: {fallback_error}")
         return []
+
+async def get_campaign_audience_breakdowns(user_id: int, access_token: str, campaign_id: str):
+    """
+    Fetch audience breakdowns (Age/Gender and Country/Region) for a specific campaign.
+    Uses two separate calls to avoid Meta API errors with combined breakdowns.
+    """
+    try:
+        if not campaign_id:
+            return {}
+
+        results = {}
+        
+        async with httpx.AsyncClient() as client:
+            # 1. Age and Gender (Last 30 days)
+            resp_dem = await client.get(
+                f"https://graph.facebook.com/v20.0/{campaign_id}/insights",
+                params={
+                    "access_token": access_token,
+                    "fields": "impressions,clicks,spend,reach,ctr,cpc",
+                    "breakdowns": "age,gender",
+                    "date_preset": "last_30d",
+                },
+            )
+            if resp_dem.status_code == 200:
+                results["demographics"] = resp_dem.json().get("data", [])
+            else:
+                # print(f"Demographics API error: {resp_dem.text}")
+                results["demographics"] = []
+            
+            # 2. Country and Region (State) (Last 30 days)
+            resp_geo = await client.get(
+                f"https://graph.facebook.com/v20.0/{campaign_id}/insights",
+                params={
+                    "access_token": access_token,
+                    "fields": "impressions,clicks,spend,reach,ctr,cpc",
+                    "breakdowns": "country,region",
+                    "date_preset": "last_30d",
+                },
+            )
+            if resp_geo.status_code == 200:
+                results["geography"] = resp_geo.json().get("data", [])
+            else:
+                # print(f"Geography API error: {resp_geo.text}")
+                results["geography"] = []
+        
+        return results
+    except Exception as e:
+        # print(f"Error fetching audience breakdowns: {e}")
+        return {}
+
+
+async def get_campaign_adsets(user_id: int, access_token: str, campaign_id: str):
+    """
+    Fetch all ad sets belonging to a campaign. Simplified version with heavy logging.
+    """
+    try:
+        if not campaign_id:
+            logger.error("get_campaign_adsets: campaign_id is missing")
+            return []
+            
+        url = f"https://graph.facebook.com/v20.0/{campaign_id}/adsets"
+        params = {
+            "access_token": access_token,
+            "fields": "id,name,status,daily_budget,lifetime_budget,targeting",
+            "limit": 250 # Increase limit just in case
+        }
+        
+        logger.info(f"FETCHING ADSETS: {url} with campaign_id: {campaign_id}")
+        
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, params=params)
+            data = resp.json()
+            
+            logger.info(f"META RESPONSE STATUS: {resp.status_code}")
+            
+            if "error" in data:
+                logger.error(f"META API ERROR: {json.dumps(data['error'])}")
+                return []
+                
+            results = data.get("data", [])
+            logger.info(f"FOUND {len(results)} ADSETS for campaign {campaign_id}")
+            return results
+            
+    except Exception as e:
+        logger.error(f"EXCEPTION in get_campaign_adsets: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return []
+
+
+async def update_adset_configuration(user_id: int, access_token: str, adset_id: str, updates: dict):
+    """
+    Apply updates (targeting, budget, status) to a specific Meta Ad Set.
+    """
+    try:
+        if not adset_id:
+            return {"success": False, "error": "Missing Ad Set ID"}
+            
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"https://graph.facebook.com/v20.0/{adset_id}",
+                params={"access_token": access_token},
+                json=updates
+            )
+            
+            if resp.status_code == 200:
+                return {"success": True, "data": resp.json()}
+            else:
+                return {"success": False, "error": resp.text}
+                
+    except Exception as e:
+        return {"success": False, "error": str(e)}

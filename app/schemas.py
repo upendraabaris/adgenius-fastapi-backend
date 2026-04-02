@@ -116,6 +116,11 @@ class RecommendationStatusUpdate(BaseModel):
     status: Literal["pending", "approved", "rejected", "applied"]
 
 
+class ApplyOptimizationRequest(BaseModel):
+    selected_tips: List[str]
+    selected_adset_ids: List[str]
+
+
 # -------------------------
 # Chat Schemas
 # -------------------------
