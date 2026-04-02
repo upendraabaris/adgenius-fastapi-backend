@@ -1,8 +1,10 @@
 from datetime import datetime
 from typing import Dict, List, Optional
 import logging
+import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -227,6 +229,77 @@ async def review_campaign_optimization(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/campaigns/{campaign_id}/history")
+async def get_campaign_optimization_history(
+    campaign_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Fetch the list of optimizations performed on a campaign from the database.
+    """
+    user_id = _require_user_id(request)
+    result = await db.execute(
+        select(models.OptimizationHistory)
+        .where(models.OptimizationHistory.user_id == user_id)
+        .where(models.OptimizationHistory.campaign_id == campaign_id)
+        .order_by(models.OptimizationHistory.created_at.desc())
+    )
+    history = result.scalars().all()
+    return history
+
+
+@router.post("/history/{history_id}/restore")
+async def restore_optimization_snapshot(
+    history_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Rollback to a specific 'before_config' from the history.
+    """
+    user_id = _require_user_id(request)
+    
+    # 1. Fetch history record
+    result = await db.execute(
+        select(models.OptimizationHistory).where(
+            models.OptimizationHistory.id == history_id,
+            models.OptimizationHistory.user_id == user_id
+        )
+    )
+    record = result.scalars().first()
+    if not record:
+        raise HTTPException(status_code=404, detail="History record not found")
+        
+    # 2. Get Meta connection
+    integration = await db.execute(
+        select(models.Integration).where(
+            models.Integration.user_id == user_id,
+            models.Integration.provider == 'meta'
+        )
+    )
+    integration = integration.scalars().first()
+    if not integration:
+        raise HTTPException(status_code=400, detail="Meta account not connected")
+        
+    # 3. Restore to Meta
+    try:
+        update_result = await meta_service.update_adset_configuration(
+            user_id, integration.access_token, record.adset_id, record.before_config
+        )
+        
+        if update_result.get("success"):
+            record.status = "restored"
+            await db.commit()
+            return {"success": True, "message": "Manual restore successful"}
+        else:
+            raise HTTPException(status_code=500, detail=f"Meta restore failed: {update_result.get('error')}")
+            
+    except Exception as e:
+        logger.error(f"Error restoring from history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/campaigns/{campaign_id}/apply")
 async def apply_campaign_optimization(
     campaign_id: str,
@@ -235,11 +308,11 @@ async def apply_campaign_optimization(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Translate selected tips into parameters and apply to selected ad sets.
+    Apply AI recommendations with transactional rollback & DB audit logging.
     """
     user_id = _require_user_id(request)
     
-    # Get user's meta connection from Integration table
+    # 1. Get credentials
     integration = await db.execute(
         select(models.Integration).where(
             models.Integration.user_id == user_id,
@@ -247,65 +320,99 @@ async def apply_campaign_optimization(
         )
     )
     integration = integration.scalars().first()
-    
     if not integration:
         raise HTTPException(status_code=400, detail="Meta account not connected")
         
     access_token = integration.access_token
-    account_id = integration.selected_ad_account
     
     selected_tips = payload.selected_tips
     selected_adset_ids = payload.selected_adset_ids
     
-    if not selected_tips or not selected_adset_ids:
-        return {"success": False, "message": "No tips or adsets selected"}
-        
-    results = []
-    
     try:
-        # For each selected ad set, translate strategy and apply
-        for adset_id in selected_adset_ids:
-            # 1. Get current config for this adset (to base updates on)
-            import httpx
-            async with httpx.AsyncClient() as client:
-                config_resp = await client.get(
-                    f"https://graph.facebook.com/v20.0/{adset_id}",
-                    params={"access_token": access_token, "fields": "id,name,daily_budget,targeting"}
-                )
-                current_config = config_resp.json()
-            
-            # 2. Use AI to translate tips to specific Meta params for this adset
-            update_params = await ai_recommendations.translate_strategy_to_params(
-                selected_tips=selected_tips,
-                current_configuration=current_config
-            )
-            
-            if not update_params:
-                results.append({"adset_id": adset_id, "success": False, "error": "AI could not parse actions"})
-                continue
-                
-            # 3. Apply to Meta
-            apply_res = await meta_service.update_adset_configuration(
-                user_id=user_id,
-                access_token=access_token,
-                adset_id=adset_id,
-                updates=update_params
-            )
-            
-            results.append({
-                "adset_id": adset_id,
-                "adset_name": current_config.get("name"),
-                "success": apply_res["success"],
-                "error": apply_res.get("error")
-            })
-            
-        return {
-            "success": any(r["success"] for r in results),
-            "results": results
+        # STEP A: Snapshotting - Parallel backup of current configs
+        backup_tasks = [
+            meta_service.get_adset_configuration(user_id, access_token, aid) 
+            for aid in selected_adset_ids
+        ]
+        backup_results = await asyncio.gather(*backup_tasks)
+        adset_backups = {
+            aid: config for aid, config in zip(selected_adset_ids, backup_results) if config
         }
         
+        applied_results = []
+        successfully_updated_ids = []
+        
+        # STEP B: Apply optimizations per ad set
+        for adset_id in selected_adset_ids:
+            current_config = adset_backups.get(adset_id)
+            if not current_config:
+                continue
+            
+            # 1. AI Translation
+            update_payload = await ai_recommendations.translate_strategy_to_params(
+                selected_tips, current_config
+            )
+            
+            # 2. Add DB Log (Audit Trail)
+            history_record = models.OptimizationHistory(
+                user_id=user_id,
+                campaign_id=campaign_id,
+                adset_id=adset_id,
+                before_config=current_config,
+                after_config=update_payload,
+                strategy_tips=selected_tips,
+                status="pending"
+            )
+            db.add(history_record)
+            await db.flush() # Get history_record.id
+            
+            # 3. Push to Meta
+            meta_update = await meta_service.update_adset_configuration(
+                user_id, access_token, adset_id, update_payload
+            )
+            
+            if meta_update.get("success"):
+                history_record.status = "applied"
+                applied_results.append({"adset_id": adset_id, "success": True})
+                successfully_updated_ids.append(adset_id)
+            else:
+                # CRITICAL: Trigger Rollback for previous adsets in this transaction
+                history_record.status = "failed"
+                history_record.error_message = meta_update.get("error")
+                
+                logger.warning(f"Optimization failed for adset {adset_id}. Initiating rollback for batch.")
+                
+                rollback_tasks = [
+                    meta_service.update_adset_configuration(
+                        user_id, access_token, aid, adset_backups[aid]
+                    ) for aid in successfully_updated_ids
+                ]
+                await asyncio.gather(*rollback_tasks)
+                
+                # Mark history as rolled_back
+                for prev_id in successfully_updated_ids:
+                    # Update DB status (This is slightly inefficient, ideally update in bulk)
+                    await db.execute(
+                        update(models.OptimizationHistory)
+                        .where(models.OptimizationHistory.user_id == user_id)
+                        .where(models.OptimizationHistory.adset_id == prev_id)
+                        .where(models.OptimizationHistory.status == "applied")
+                        .values(status="rolled_back")
+                    )
+                
+                await db.commit()
+                return {
+                    "success": False, 
+                    "error": f"Failed at {current_config.get('name') or adset_id}. All changes rolled back.",
+                    "details": meta_update.get("error")
+                }
+        
+        await db.commit()
+        return {"success": True, "results": applied_results}
+
     except Exception as e:
-        logger.error(f"Error in apply_campaign_optimization: {e}")
+        logger.error(f"Bulk optimization error: {e}")
+        await db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 

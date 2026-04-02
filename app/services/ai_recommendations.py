@@ -513,22 +513,29 @@ async def translate_strategy_to_params(selected_tips: List[str], current_configu
         CURRENT AD SET CONFIGURATION (for reference):
         {json.dumps(current_configuration, indent=2)}
         
-        REQUIREMENTS:
-        1. Output ONLY a valid JSON object containing the keys to be updated.
-        2. Supported keys: `daily_budget`, `targeting`.
-        3. For `targeting`, include fields like `age_min`, `age_max`, `genders`, `geo_locations`.
-        4. If a tip says "Focus on 25-34", update `age_min: 25` and `age_max: 34`.
-        5. If a tip says "Exclude 65+", ensure the range doesn't include 65.
-        6. For Budget: If it says "Increase budget by 20%", calculate the value based on `daily_budget` in the current config.
-        7. Maintain all other targeting settings unless explicitly told to change them.
+        CRITICAL RULES FOR META API COMPLIANCE:
+        1. Output ONLY a valid JSON object. No markdown, no explanations.
+        2. Supported keys: `daily_budget` (Integer in paise), `targeting` (Object).
+        3. For `targeting`:
+           - `age_min`: Integer (18-65).
+           - `age_max`: Integer (18-65).
+           - `genders`: Array of integers ([1] for Male, [2] for Female, or [1,2]).
+           - `geo_locations`: 
+             - `countries`: MUST be an array of ISO country codes (e.g., ["IN"]).
+             - `regions`: DO NOT use string IDs like "IN_CH". ONLY use an array of objects with numeric keys if known (e.g. [{"key": "4004"}]). 
+             - IMPORTANT: If the strategy mentions a specific region (like "Delhi") but you don't know its numeric Meta Key, DO NOT add it to `regions`. Keep the existing `geo_locations` from the current configuration instead.
+        4. Budget: Meta uses integers in paise. If current `daily_budget` is "50000" (₹500), and you increase it by 20%, the new value must be 60000.
         
         RESPONSE FORMAT:
         {{
-            "targeting": {{ ... }},
-            "daily_budget": 1234
+            "targeting": {{
+                "age_min": 25,
+                "age_max": 45,
+                "genders": [1, 2],
+                "geo_locations": {{ "countries": ["IN"] }}
+            }},
+            "daily_budget": 60000
         }}
-        
-        (Return ONLY the JSON object, no explanation)
         """
         
         response = await llm.ainvoke(prompt)
