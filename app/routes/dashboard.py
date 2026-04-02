@@ -8,7 +8,7 @@ from sqlalchemy.future import select
 
 from app.db import AsyncSessionLocal
 from app import models, schemas
-from app.services import meta_service
+from app.services import meta_service, ai_recommendations
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -91,168 +91,223 @@ def _calculate_roas(spend: float, revenue: float) -> str:
     return f"{roas:.2f}x"
 
 async def _get_campaign_optimization_recommendation(
+    user_id: int,
+    access_token: str,
+    account_id: str,
     campaign_data: Dict,
     insight_data: Dict,
     business_objective: Optional[str] = None,
     website_url: Optional[str] = None
 ) -> List[str]:
     """
-    AI-first recommendation engine (no hardcoded optimization logic)
+    Generate professional AI-powered audit bullets for a specific campaign.
     """
-
+    campaign_id = campaign_data.get("id")
+    campaign_name = campaign_data.get("name", "Unnamed")
+    
     try:
-        from app.services.ai_recommendations import get_ai_llm
-        llm = get_ai_llm()
-
-        # -------------------------
-        # 📊 RAW METRICS (NO JUDGEMENT)
-        # -------------------------
+        # Fetch real demographic and geographic data
+        breakdowns = await meta_service.get_campaign_audience_breakdowns(user_id, access_token, campaign_id)
+        
+        # Extract metrics for the AI audit
         spend = float(insight_data.get("spend", 0))
-        impressions = int(insight_data.get("impressions", 0))
-        clicks = int(insight_data.get("clicks", 0))
-        reach = int(insight_data.get("reach", 0))
-        frequency = float(insight_data.get("frequency", 0))
-
+        
         # ROAS
         roas_data = insight_data.get("purchase_roas", [])
-        roas = float(roas_data[0].get("value", 0)) if roas_data else 0
-
-        # Conversions & Revenue
+        roas = float(roas_data[0].get("value", 0)) if roas_data and len(roas_data) > 0 else 0.0
+        
+        # Conversions (Purchase/Leads)
         actions = insight_data.get("actions", []) or []
-        action_values = insight_data.get("action_values", []) or []
-
         conversions = 0
-        revenue = 0.0
-
         for action in actions:
-            if "purchase" in action.get("action_type", "").lower():
-                conversions += int(action.get("value", 0))
-
-        for action_value in action_values:
-            if "purchase" in action_value.get("action_type", "").lower():
-                revenue += float(action_value.get("value", 0))
-
-        # -------------------------
-        # 📈 DERIVED METRICS (CALCULATED ONLY)
-        # -------------------------
-        ctr = (clicks / impressions * 100) if impressions > 0 else 0
-        cpc = (spend / clicks) if clicks > 0 else 0
-
-        # Prefer LPV if available
-        lpv = int(insight_data.get("landing_page_views", 0))
-        if lpv > 0:
-            conversion_rate = (conversions / lpv * 100)
-        else:
-            conversion_rate = (conversions / clicks * 100) if clicks > 0 else 0
-
-        cost_per_conversion = (spend / conversions) if conversions > 0 else 0
-
-        # -------------------------
-        # 🌐 OPTIONAL WEBSITE CONTEXT
-        # -------------------------
-        website_info = ""
-        if website_url:
-            try:
-                import requests
-                from bs4 import BeautifulSoup
-
-                response = requests.get(website_url, timeout=5)
-                if response.status_code == 200:
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    title = soup.find('title')
-                    headings = soup.find_all(['h1', 'h2'])[:3]
-
-                    website_info = f"""
-WEBSITE CONTEXT:
-- Title: {title.text.strip() if title else 'N/A'}
-- Key Topics: {[h.get_text(strip=True) for h in headings]}
-"""
-            except Exception:
-                website_info = f"\nWEBSITE: {website_url}"
-
-        # -------------------------
-        # 🧠 AI PROMPT (IMPROVED)
-        # -------------------------
-        prompt = f"""
-You are a senior Meta Ads performance marketer.
-
-{website_info}
-
-CAMPAIGN:
-- Name: {campaign_data.get('name', 'Unnamed')}
-- Objective: {campaign_data.get('objective', 'Unknown')}
-- Funnel Stage: MOF (Middle of Funnel - warm audience)
-
-PERFORMANCE DATA:
-- Spend: ₹{spend:.2f}
-- Revenue: ₹{revenue:.2f}
-- ROAS: {roas:.2f}x
-- Impressions: {impressions}
-- Clicks: {clicks}
-- CTR: {ctr:.2f}%
-- CPC: ₹{cpc:.2f}
-- Conversions: {conversions}
-- Conversion Rate: {conversion_rate:.2f}%
-- Cost/Conversion: ₹{cost_per_conversion:.2f}
-- Reach: {reach}
-- Frequency: {frequency:.2f}
-
-INDUSTRY BENCHMARKS (India E-commerce):
-- Good CTR: 2–5%
-- Good CPC: ₹3–₹10
-- Good Conversion Rate: 2–5%
-- Good ROAS: 3x+
-
-IMPORTANT RULES:
-- Do NOT give generic advice
-- Do NOT suggest improving metrics already good
-- Focus on the biggest bottleneck affecting ROAS
-- If traffic is good → focus on conversion/AOV
-- If conversion rate is good but ROAS is low → suggest AOV/offer fixes
-- If everything is strong → suggest scaling strategy
-
-OUTPUT:
-Return ONLY a JSON array with 3–4 recommendations.
-
-Each recommendation must:
-- Include at least one metric value
-- Be actionable
-- Max 15 words
-
-Example:
-"ROAS 2.2x below 3x benchmark – test bundle offers to increase AOV"
-"""
-
-        # -------------------------
-        # 🤖 CALL AI
-        # -------------------------
-        response = await llm.ainvoke(prompt)
-        ai_content = response.content.strip()
-
-        import json, re
-
-        json_match = re.search(r'\[.*\]', ai_content, re.DOTALL)
-        if json_match:
-            recommendations = json.loads(json_match.group())
-        else:
-            recommendations = json.loads(ai_content)
-
-        if isinstance(recommendations, list) and len(recommendations) > 0:
-            return recommendations[:4]
-
-        raise ValueError("Invalid AI response")
+            action_type = action.get("action_type", "")
+            if any(keyword in action_type.lower() for keyword in ["purchase", "conversion", "lead", "complete_registration"]):
+                conversions += int(action.get("value", 0) or 0)
+        
+        cpr = spend / conversions if conversions > 0 else 0
+        ctr = float(insight_data.get("ctr", 0))
+        
+        # Call the new specialized AI helper for a professional "Audit-Grade" output
+        from app.services.ai_recommendations import generate_campaign_mini_audit
+        recommendations = await generate_campaign_mini_audit(
+            campaign_name=campaign_name,
+            spend=spend,
+            roas=roas,
+            conversions=conversions,
+            cpr=cpr,
+            ctr=ctr,
+            breakdowns=breakdowns,
+            business_objective=business_objective
+        )
+        
+        return recommendations[:10]
 
     except Exception as e:
-        print(f"AI Error: {e}")
+        logger.error(f"Error generating professional campaign audit: {e}")
+        return ["Monitor performance across demographic segments for scaling opportunities."]
 
-        # -------------------------
-        # 🔄 SMART FALLBACK (MINIMAL)
-        # -------------------------
-        return [
-            f"ROAS {roas:.2f}x – test new offers to improve profitability",
-            f"CTR {ctr:.2f}% & CPC ₹{cpc:.2f} – traffic is efficient",
-            f"Improve AOV to scale beyond current performance"
-        ]
+
+@router.get("/campaigns/{campaign_id}/review")
+async def review_campaign_optimization(
+    campaign_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Fetch both AI tips and Ad Set list for the Review & Apply modal.
+    """
+    user_id = _require_user_id(request)
+    
+    # Get user's meta connection from Integration table
+    meta_conn = await db.execute(
+        select(models.Integration).where(
+            models.Integration.user_id == user_id,
+            models.Integration.provider == 'meta'
+        )
+    )
+    meta_conn = meta_conn.scalars().first()
+    
+    if not meta_conn:
+        raise HTTPException(status_code=400, detail="Meta account not connected")
+        
+    access_token = meta_conn.access_token
+    account_id = meta_conn.selected_ad_account
+    
+    try:
+        # 1. Fetch Ad Sets for this campaign
+        adsets = await meta_service.get_campaign_adsets(user_id, access_token, campaign_id)
+        
+        # 2. Fetch specific Campaign insights to get the AI tips
+        import httpx
+        async with httpx.AsyncClient() as client:
+            # Need to get campaign name and objective
+            c_resp = await client.get(
+                f"https://graph.facebook.com/v20.0/{campaign_id}",
+                params={"access_token": access_token, "fields": "name,objective"}
+            )
+            campaign_data = c_resp.json()
+            
+            # Need to get campaign insights for the AI audit
+            i_resp = await client.get(
+                f"https://graph.facebook.com/v20.0/{campaign_id}/insights",
+                params={
+                    "access_token": access_token, 
+                    "fields": "spend,purchase_roas,actions,ctr",
+                    "date_preset": "last_30d"
+                }
+            )
+            insights_list = i_resp.json().get("data", [])
+            insight_data = insights_list[0] if insights_list else {}
+
+        # Get business objective from business profile if available
+        biz_profile = await db.execute(
+            select(models.BusinessProfile).where(models.BusinessProfile.userId == user_id)
+        )
+        biz_profile = biz_profile.scalars().first()
+        biz_obj = biz_profile.objective if biz_profile else None
+
+        # 3. Generate AI tips (Common Strategy)
+        tips = await _get_campaign_optimization_recommendation(
+            user_id=user_id,
+            access_token=access_token,
+            account_id=account_id,
+            campaign_data=campaign_data,
+            insight_data=insight_data,
+            business_objective=biz_obj
+        )
+        
+        return {
+            "campaign_name": campaign_data.get("name", "Unknown Campaign"),
+            "tips": tips,
+            "adsets": adsets
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in review_campaign_optimization: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/campaigns/{campaign_id}/apply")
+async def apply_campaign_optimization(
+    campaign_id: str,
+    payload: schemas.ApplyOptimizationRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Translate selected tips into parameters and apply to selected ad sets.
+    """
+    user_id = _require_user_id(request)
+    
+    # Get user's meta connection from Integration table
+    integration = await db.execute(
+        select(models.Integration).where(
+            models.Integration.user_id == user_id,
+            models.Integration.provider == 'meta'
+        )
+    )
+    integration = integration.scalars().first()
+    
+    if not integration:
+        raise HTTPException(status_code=400, detail="Meta account not connected")
+        
+    access_token = integration.access_token
+    account_id = integration.selected_ad_account
+    
+    selected_tips = payload.selected_tips
+    selected_adset_ids = payload.selected_adset_ids
+    
+    if not selected_tips or not selected_adset_ids:
+        return {"success": False, "message": "No tips or adsets selected"}
+        
+    results = []
+    
+    try:
+        # For each selected ad set, translate strategy and apply
+        for adset_id in selected_adset_ids:
+            # 1. Get current config for this adset (to base updates on)
+            import httpx
+            async with httpx.AsyncClient() as client:
+                config_resp = await client.get(
+                    f"https://graph.facebook.com/v20.0/{adset_id}",
+                    params={"access_token": access_token, "fields": "id,name,daily_budget,targeting"}
+                )
+                current_config = config_resp.json()
+            
+            # 2. Use AI to translate tips to specific Meta params for this adset
+            update_params = await ai_recommendations.translate_strategy_to_params(
+                selected_tips=selected_tips,
+                current_configuration=current_config
+            )
+            
+            if not update_params:
+                results.append({"adset_id": adset_id, "success": False, "error": "AI could not parse actions"})
+                continue
+                
+            # 3. Apply to Meta
+            apply_res = await meta_service.update_adset_configuration(
+                user_id=user_id,
+                access_token=access_token,
+                adset_id=adset_id,
+                updates=update_params
+            )
+            
+            results.append({
+                "adset_id": adset_id,
+                "adset_name": current_config.get("name"),
+                "success": apply_res["success"],
+                "error": apply_res.get("error")
+            })
+            
+        return {
+            "success": any(r["success"] for r in results),
+            "results": results
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in apply_campaign_optimization: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 async def _build_stats(
     meta_connected: bool,
@@ -378,6 +433,7 @@ async def _build_stats(
         {"id": "conversions", "title": "Conversions", "value": conversions_value, "change": conversions_change, "trend": "up" if conversions_change.startswith("+") else "down"},
     ]
 
+import asyncio
 
 async def _build_campaigns(
     meta_connected: bool,
@@ -463,54 +519,75 @@ async def _build_campaigns(
             if campaign_id:
                 budgets_lookup[campaign_id] = budget
         
-        # Build campaign list with real data - SHOW ACTIVE AND PAUSED CAMPAIGNS
-        campaign_list = []
+        # Pre-process active campaigns and prepare AI recommendation tasks
+        active_campaign_data = []
+        ai_tasks = []
+        
         for campaign in campaigns:
             campaign_id = campaign.get("id")
             campaign_name = campaign.get("name", "Unnamed Campaign")
             status = campaign.get("status", "UNKNOWN").upper()
             
-            # Include ONLY ACTIVE campaigns
             if status != "ACTIVE":
                 continue
-            
-            # Get insights for this campaign
+                
             insight = insights_lookup.get(campaign_id, {})
+            budget_info = budgets_lookup.get(campaign_id, {})
+            
+            active_campaign_data.append({
+                "campaign": campaign,
+                "insight": insight,
+                "budget_info": budget_info
+            })
+            
+            # Add to AI task list
+            ai_tasks.append(
+                _get_campaign_optimization_recommendation(
+                    user_id=user_id,
+                    access_token=access_token,
+                    account_id=account_id,
+                    campaign_data=campaign,
+                    insight_data=insight,
+                    business_objective=objective,
+                    website_url=website_url
+                )
+            )
+            
+        # Run all AI recommendation tasks in parallel
+        ai_results = await asyncio.gather(*ai_tasks, return_exceptions=True)
+        
+        # Build the final campaign list
+        campaign_list = []
+        for idx, data in enumerate(active_campaign_data):
+            campaign = data["campaign"]
+            insight = data["insight"]
+            budget_info = data["budget_info"]
+            campaign_id = campaign.get("id")
+            campaign_name = campaign.get("name", "Unnamed Campaign")
+            
             spend = float(insight.get("spend", 0))
             spend_str = _format_currency(spend, currency)
-            
-            # Get impressions and reach for this campaign
             impressions = int(insight.get("impressions", 0))
             reach = int(insight.get("reach", 0))
             
-            # Get budget for this campaign
-            budget_info = budgets_lookup.get(campaign_id, {})
-            daily_budget = float(budget_info.get("daily_budget", 0) or 0)
-            # Convert from cents to currency units (Meta API returns in cents)
-            daily_budget = daily_budget / 100 if daily_budget > 0 else 0
+            daily_budget = float(budget_info.get("daily_budget", 0) or 0) / 100
             daily_budget_str = _format_currency(daily_budget, currency)
             
-            # Get ROAS from Meta API (purchase_roas field)
+            # ROAS and Conversion logic (match AI Report logic)
+            # Use action and purchase_roas fields directly
+            meta_actions = insight.get("actions", []) or []
             roas_value = insight.get("purchase_roas", [])
-            if roas_value and len(roas_value) > 0:
-                # Meta returns ROAS as array, get first value
-                roas_num = float(roas_value[0].get("value", 0))
-                roas_str = f"{roas_num:.2f}x"
-            else:
-                # Fallback: calculate ROAS manually if purchase_roas not available
-                actions = insight.get("actions", []) or []
-                action_values = insight.get("action_values", []) or []
-                revenue = 0.0
-                
-                # Extract purchase values (revenue)
-                for action_value in action_values:
-                    action_type = action_value.get("action_type", "")
-                    value = float(action_value.get("value", 0) or 0)
-                    if "purchase" in action_type.lower() or "conversion" in action_type.lower():
-                        revenue += value
-                
-                roas_str = _calculate_roas(spend, revenue) if spend > 0 else "0.00x"
-                roas_num = float(roas_str.replace("x", "")) if roas_str != "0.00x" else 0
+            roas_num = float(roas_value[0].get("value", 0)) if roas_value and len(roas_value) > 0 else 0.0
+            roas_str = f"{roas_num:.2f}x"
+            
+            conversions = 0
+            for action in meta_actions:
+                action_type = action.get("action_type", "")
+                if any(keyword in action_type.lower() for keyword in ["purchase", "conversion", "lead", "complete_registration"]):
+                    conversions += int(action.get("value", 0) or 0)
+            
+            cpr_num = spend / conversions if conversions > 0 else 0
+            cpr_str = _format_currency(cpr_num, currency) if conversions > 0 else "—"
             
             if roas_num >= 3.0:
                 performance = "excellent"
@@ -520,58 +597,37 @@ async def _build_campaigns(
                 performance = "average"
             else:
                 performance = "poor"
+
+            # Get AI recommendations from parallel results
+            ai_tips = ai_results[idx]
+            if isinstance(ai_tips, Exception):
+                logger.error(f"AI task failed for {campaign_name}: {ai_tips}")
+                ai_tips = ["Optimization insights temporarily unavailable."]
             
-            # Generate AI optimization recommendations for this campaign
-            try:
-                ai_recommendations = await _get_campaign_optimization_recommendation(
-                    campaign_data=campaign,
-                    insight_data=insight,
-                    business_objective=objective,
-                    website_url=website_url
-                )
-            except Exception as e:
-                # Campaign-specific fallback recommendations based on actual metrics
-                campaign_name = campaign.get('name', 'Campaign')[:20]
-                
-                # Calculate conversions for fallback
-                actions = insight.get("actions", []) or []
-                conversions = 0
-                for action in actions:
-                    if "purchase" in action.get("action_type", "").lower():
-                        conversions += int(action.get("value", 0))
-                
-                if roas_num >= 2.0:
-                    ai_recommendations = [
-                        f"Scale '{campaign_name}' budget by 30% - current {roas_str} ROAS is profitable",
-                        f"Test lookalike audiences for this {roas_str} ROAS performer",
-                        f"Expand targeting while maintaining {roas_str} performance level"
-                    ]
-                elif roas_num >= 1.0:
-                    ai_recommendations = [
-                        f"Optimize '{campaign_name}' creatives to push {roas_str} ROAS above 2.0x",
-                        f"A/B test new audiences to improve {conversions} conversions",
-                        f"Monitor {campaign_name} daily for performance improvements"
-                    ]
-                else:
-                    ctr_val = (clicks / impressions * 100) if impressions > 0 else 0
-                    ai_recommendations = [
-                        f"'{campaign_name}' ROAS {roas_str} needs immediate attention",
-                        f"Review targeting - current CTR {ctr_val:.1f}% may indicate poor fit",
-                        f"Consider pausing {campaign_name} if metrics don't improve in 3 days"
-                    ]
+            # Other Meta Metrics
+            meta_clicks = insight.get("clicks", "0")
+            meta_ctr = insight.get("ctr", "0")
+            meta_cpc = insight.get("cpc", "0")
+            meta_frequency = insight.get("frequency", "0")
             
             campaign_list.append({
                 "id": campaign_id,
                 "name": campaign_name,
-                "status": "active",  # Only active campaigns now
+                "status": "active",
                 "spend": spend_str,
                 "roas": roas_str,
+                "conversions": _format_number(conversions),
+                "cpr": cpr_str,
                 "performance": performance,
                 "impressions": _format_number(impressions) if impressions > 0 else "0",
                 "reach": _format_number(reach) if reach > 0 else "0",
                 "daily_budget": daily_budget_str if daily_budget > 0 else "₹0",
                 "objective": campaign.get("objective", ""),
-                "optimization_tip": ai_recommendations,
+                "optimization_tip": ai_tips,
+                "clicks": meta_clicks,
+                "ctr": f"{float(meta_ctr):.2f}%" if meta_ctr else "0.00%",
+                "cpc": _format_currency(float(meta_cpc), currency) if meta_cpc else "₹0.00",
+                "frequency": f"{float(meta_frequency):.2f}" if meta_frequency else "0.00",
             })
         
         # If no active campaigns found, return a message
@@ -591,6 +647,12 @@ async def _build_campaigns(
                 ],
                 }
             ]
+        
+        # [DEBUG] Print final campaign list to console
+        print(f"\n{'='*20} FINAL CAMPAIGN LIST {'='*20}")
+        import json
+        print(json.dumps(campaign_list, indent=2))
+        print(f"{'='*20} END OF CAMPAIGN LIST {'='*20}\n")
         
         return campaign_list
         
@@ -842,6 +904,76 @@ async def _build_rule_based_recommendations(campaigns: List[Dict], campaign_insi
         )
     
     return suggestions[:3]  # Limit to 3 recommendations
+
+
+@router.post("/generate-report")
+async def generate_report_endpoint(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a professional AI audit report for the ad account."""
+    user_id = _require_user_id(request)
+    
+    # 1. Get Integration/Access Token
+    integration = (await db.execute(
+        select(models.Integration).where(
+            models.Integration.user_id == user_id,
+            models.Integration.provider == "meta",
+        )
+    )).scalars().first()
+    
+    if not integration or not integration.access_token or not integration.selected_ad_account:
+        raise HTTPException(status_code=400, detail="Meta Ads not connected or account not selected")
+    
+    access_token = integration.access_token
+    account_id = integration.selected_ad_account
+    
+    # 2. Get Business Profile (for Objective)
+    business = (await db.execute(
+        select(models.BusinessProfile).where(models.BusinessProfile.userId == user_id)
+    )).scalars().first()
+    
+    try:
+        # 3. Fetch Data in parallel/sequence
+        # Account-level insights
+        account_insights = await meta_service.get_account_insights(user_id, access_token, account_id)
+        
+        # Get all campaigns to check their status
+        campaigns = await meta_service.get_campaigns(user_id, access_token, account_id)
+        active_campaign_ids = [c.get("id") for c in campaigns if c.get("status", "").upper() == "ACTIVE"]
+        
+        # Campaign-level insights
+        all_campaign_insights = await meta_service.get_campaign_insights(user_id, access_token, account_id)
+        
+        # Filter: ONLY campaigns that are currently ACTIVE
+        active_campaign_insights = [
+            insight for insight in all_campaign_insights 
+            if insight.get("campaign_id") in active_campaign_ids
+        ]
+        
+        # Audience Breakdowns (we need these for the report)
+        # We'll get breakdowns for the top-performing ACTIVE campaign to keep it focused
+        audience_data = []
+        if active_campaign_insights:
+            top_campaign_id = active_campaign_insights[0].get("campaign_id")
+            if top_campaign_id:
+                audience_data = await meta_service.get_campaign_audience_breakdowns(
+                    user_id, access_token, top_campaign_id
+                )
+        
+        # 4. Generate the Report using AI (passing only ACTIVE insights)
+        report_markdown = await ai_recommendations.generate_account_audit_report(
+            account_insights=account_insights,
+            campaign_insights=active_campaign_insights,
+            audience_breakdowns=audience_data,
+            business_objective=business.objective if business else None
+        )
+        
+        return {"report": report_markdown, "generatedAt": datetime.utcnow()}
+        
+    except Exception as e:
+        logger.error(f"Error generating report endpoint: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate report: {str(e)}")
 
 
 @router.get("/stats")
@@ -1107,7 +1239,6 @@ async def get_campaign_details(
             meta_service.get_campaign_insights(user_id, access_token, account_id),
             meta_service.get_campaign_budgets(user_id, access_token, account_id)
         )
-        
         # Find the specific campaign
         campaign = next((c for c in campaigns if c.get("id") == campaign_id), None)
         if not campaign:
