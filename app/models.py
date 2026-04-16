@@ -16,6 +16,7 @@ class User(Base):
     name = Column(String(255))
     email = Column(String(255), unique=True, index=True)
     passwordHash = Column(String(255))
+    credits_balance = Column(Integer, default=100)  # Starting credits for free plan
     createdAt = Column("createdAt", DateTime(timezone=True), server_default=func.now())
     updatedAt = Column("updatedAt", DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -49,7 +50,8 @@ class Integration(Base):
         server_default=text("now()"),
         onupdate=text("now()")
     )
-    selected_ad_account = Column(Text)
+    selected_ad_accounts = Column(JSONB, default=[])  # List of selected account IDs
+    is_account_locked = Column(Boolean, default=False)  # For Free plan account locking
 
 
 class ChatHistory(Base):

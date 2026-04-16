@@ -12,12 +12,14 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str
     name: Optional[str] = None
+    plan: Optional[str] = 'free'
 
 
 class UserOut(BaseModel):
     id: int
     email: EmailStr
     name: Optional[str]
+    credits_balance: int = 0
 
     class Config:
         from_attributes = True  # Enable from_orm for ORM models
@@ -38,7 +40,7 @@ class IntegrationCreate(BaseModel):
     provider: str
     access_token: str
     ad_accounts: Optional[Any] = None
-    selected_ad_account: Optional[str] = None
+    selected_ad_accounts: List[str] = []
 
 class SignupResponse(BaseModel):
     user: UserOut
@@ -92,7 +94,8 @@ class DashboardRecommendation(BaseModel):
 
 class DashboardMetaInfo(BaseModel):
     connected: bool
-    selectedAdAccount: Optional[str]
+    selectedAdAccount: Optional[str] = None
+    selectedAdAccounts: List[str] = []
     adAccountCount: int
 
 

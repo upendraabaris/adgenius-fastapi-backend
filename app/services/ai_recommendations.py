@@ -24,33 +24,31 @@ async def generate_ai_recommendations(
     business_objective: Optional[str] = None,
     account_id: Optional[str] = None,
     website_url: Optional[str] = None
-) -> List[Dict]:
+) -> tuple[List[Dict], int]:
     """
     Generate AI-powered recommendations using Claude Haiku.
     
-    Returns recommendations with ROI impact estimates and actionable insights.
+    Returns (recommendations, total_tokens).
     """
+    from app.utils.credits import estimate_tokens
     try:
         llm = get_ai_llm()
         
         # Fetch website content if URL is provided
         website_content = ""
-        print(f"\n{'='*100}")
-        print(f"🔍 STARTING WEBSITE EXTRACTION")
-        print(f"Website URL: {website_url}")
-        print(f"{'='*100}\n")
+        # website_url: Optional[str] = None
         
         if website_url:
             try:
                 import requests
                 from bs4 import BeautifulSoup
                 
-                print(f"⏳ Fetching website: {website_url}")
+                # print(f"⏳ Fetching website: {website_url}")
                 response = requests.get(website_url, timeout=5)
-                print(f"✅ Response Status Code: {response.status_code}")
+                # print(f"✅ Response Status Code: {response.status_code}")
                 
                 if response.status_code == 200:
-                    print(f"✅ Website fetched successfully!")
+                    # print(f"✅ Website fetched successfully!")
                     soup = BeautifulSoup(response.text, 'html.parser')
                     
                     # Extract key information
@@ -63,15 +61,15 @@ async def generate_ai_recommendations(
                     text_content = ' '.join([p.get_text(strip=True) for p in paragraphs])[:1000]
                     
                     # Print website information to console
-                    print(f"\n{'='*100}")
-                    print(f"🌐 WEBSITE INFORMATION EXTRACTED:")
-                    print(f"{'='*100}")
-                    print(f"URL: {website_url}")
-                    print(f"Title: {title.text.strip() if title else 'N/A'}")
-                    print(f"Meta Description: {meta_desc.get('content', 'N/A') if meta_desc else 'N/A'}")
-                    print(f"Key Headings: {[h.get_text(strip=True) for h in headings]}")
-                    print(f"Content Summary: {text_content}")
-                    print(f"{'='*100}\n")
+                    # print(f"\n{'='*100}")
+                    # print(f"🌐 WEBSITE INFORMATION EXTRACTED:")
+                    # print(f"{'='*100}")
+                    # print(f"URL: {website_url}")
+                    # print(f"Title: {title.text.strip() if title else 'N/A'}")
+                    # print(f"Meta Description: {meta_desc.get('content', 'N/A') if meta_desc else 'N/A'}")
+                    # print(f"Key Headings: {[h.get_text(strip=True) for h in headings]}")
+                    # print(f"Content Summary: {text_content}")
+                    # print(f"{'='*100}\n")
                     
                     website_content = f"""
 WEBSITE INFORMATION:
@@ -82,16 +80,18 @@ WEBSITE INFORMATION:
 - Content Summary: {text_content}
 """
                 else:
-                    print(f"❌ Failed to fetch website. Status Code: {response.status_code}")
+                    # print(f"❌ Failed to fetch website. Status Code: {response.status_code}")
+                    pass
                     
             except requests.exceptions.Timeout:
-                print(f"⏱️ TIMEOUT: Website request timed out: {website_url}")
+                # print(f"⏱️ TIMEOUT: Website request timed out: {website_url}")
                 website_content = f"\nWEBSITE: {website_url} (Request timeout)"
             except Exception as e:
-                print(f"❌ ERROR fetching website: {e}")
+                # print(f"❌ ERROR fetching website: {e}")
                 website_content = f"\nWEBSITE: {website_url} (Could not fetch: {str(e)[:100]})"
         else:
-            print(f"⚠️  No website URL provided")
+            # print(f"⚠️  No website URL provided")
+            pass
         
         # Prepare data summary for AI analysis
         data_summary = {
@@ -201,11 +201,17 @@ Provide realistic ROI projections based on current performance data and Indian m
 All monetary mentions should be in ₹ (Indian Rupees).
 """
 
+        # [TOKEN COUNT DEBUG]
+        # estimated_tokens = len(prompt) // 4
+
         # Get AI response
         response = await llm.ainvoke(prompt)
         ai_content = response.content
-        
-        # Parse AI response
+
+        # Get total tokens for exchange
+        input_tokens = estimate_tokens(prompt)
+        output_tokens = estimate_tokens(ai_content)
+        total_tokens = input_tokens + output_tokens
         try:
             # Extract JSON from response
             import re
@@ -234,16 +240,23 @@ All monetary mentions should be in ₹ (Indian Rupees).
                     }
                 })
             
-            return formatted_recommendations
+            # VERIFICATION LOGGING
+            print(f"\n🔍 [AI RECOMMENDATIONS VERIFICATION]")
+            print(f"🗳️ Input Tokens: {input_tokens}")
+            print(f"🗳️ Output Tokens: {output_tokens}")
+            print(f"🧱 Total Billed: {total_tokens}")
+            print(f"{'='*30}\n")
+            
+            return formatted_recommendations, total_tokens
             
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse AI recommendations JSON: {e}")
             logger.error(f"AI Response: {ai_content}")
-            return _get_fallback_recommendations()
+            return _get_fallback_recommendations(), 0
             
     except Exception as e:
         logger.error(f"Error generating AI recommendations: {e}")
-        return _get_fallback_recommendations()
+        return _get_fallback_recommendations(), 0
 
 def _get_fallback_recommendations() -> List[Dict]:
     """Fallback recommendations when AI fails."""
@@ -306,10 +319,12 @@ async def generate_account_audit_report(
     campaign_insights: List[Dict],
     audience_breakdowns: List[Dict],
     business_objective: Optional[str] = None
-) -> str:
+) -> tuple[str, int]:
     """
     Generate a professional Markdown-formatted Meta Ads Account Audit.
+    Returns (markdown_report, total_tokens).
     """
+    from app.utils.credits import estimate_tokens
     try:
         llm = get_ai_llm()
         
@@ -412,9 +427,25 @@ async def generate_account_audit_report(
         """
         
         response = await llm.ainvoke(prompt)
-        return response.content
+        report_content = response.content
         
-    except Exception as e:        return "# AI Audit Report\n\nUnable to generate report at this time. Please check your data connection and try again later."
+        input_tokens = estimate_tokens(prompt)
+        output_tokens = estimate_tokens(report_content)
+        total_tokens = input_tokens + output_tokens
+        
+        # VERIFICATION LOGGING
+        print(f"\n🔍 [AI REPORT VERIFICATION]")
+        print(f"📄 Full Content:\n{report_content}")
+        print(f"🗳️ Input Tokens: {input_tokens}")
+        print(f"🗳️ Output Tokens: {output_tokens}")
+        print(f"🧱 Total Billed: {total_tokens}")
+        print(f"{'='*30}\n")
+        
+        return report_content, total_tokens
+        
+    except Exception as e:
+        error_msg = "# AI Audit Report\n\nUnable to generate report at this time. Please check your data connection and try again later."
+        return error_msg, estimate_tokens(error_msg)
 
 async def generate_campaign_mini_audit(
     campaign_name: str,
@@ -425,11 +456,13 @@ async def generate_campaign_mini_audit(
     ctr: float,
     breakdowns: Dict,
     business_objective: Optional[str] = None
-) -> List[str]:
+) -> tuple[List[str], int]:
     """
     Generate professional, agency-grade audit bullets for a single campaign using LLM.
     Acts as a Senior Meta Ads Consultant at GrowCommerce.
+    Returns (list_of_bullets, total_tokens).
     """
+    from app.utils.credits import estimate_tokens
     try:
         llm = get_ai_llm()
         
@@ -445,11 +478,6 @@ async def generate_campaign_mini_audit(
             "audience_data": breakdowns,
             "objective": business_objective or "Maximize ROI"
         }
-        
-        # [DEBUG] Print raw data to console for verification
-        print(f"\n{'='*20} RAW DATA START: {campaign_name} {'='*20}")
-        print(json.dumps(data_summary, indent=2))
-        print(f"{'='*20} RAW DATA END {'='*20}\n")
         
         prompt = f"""
         You are a Senior Meta Ads Consultant at **GrowCommerce**, a world-class performance marketing agency.
@@ -475,31 +503,52 @@ async def generate_campaign_mini_audit(
         ["bullet 1", "bullet 2", "bullet 3", "bullet 4", "bullet 5", "bullet 6"]
         """
         
+        # [DEBUG] Print raw data & Prompt to console for verification
+        print(f"\n{'='*30} AI CAMPAIGN AUDIT DEBUG: {campaign_name} {'='*30}")
+        print(f"📊 RAW DATA JSON:\n{json.dumps(data_summary, indent=2)}")
+        print(f"\n📜 FULL PROMPT (System + Data):\n{prompt}")
+        print(f"{'='*80}\n")
+        
         response = await llm.ainvoke(prompt)
         content = response.content
+        
+        input_tokens = estimate_tokens(prompt)
+        output_tokens = estimate_tokens(content)
+        total_tokens = input_tokens + output_tokens
+        
+        # VERIFICATION LOGGING
+        print(f"\n🔍 [AI CAMPAIGN TIPS VERIFICATION - {campaign_name}]")
+        print(f"📝 Full Response Content:\n{content}")
+        print(f"📏 Input Characters: {len(prompt)} -> 🗳️ Input Tokens: {input_tokens}")
+        print(f"📏 Output Characters: {len(content)} -> 🗳️ Output Tokens: {output_tokens}")
+        print(f"🧱 Total Billed for this exchange: {total_tokens}")
+        print(f"{'='*60}\n")
         
         # Clean and parse JSON
         import re
         json_match = re.search(r'\[.*\]', content, re.DOTALL)
         if json_match:
-            return json.loads(json_match.group())
-        return json.loads(content)
+            return json.loads(json_match.group()), total_tokens
+        return json.loads(content), total_tokens
         
     except Exception as e:
         logger.error(f"Error generating high-authority campaign audit: {e}")
         # Rule-based professional fallback if AI fails
-        return [
+        fallback = [
             f"✨ **Winner Insight**: The campaign is maintaining a foundational {roas:.2f}x ROAS with {conversions} verified conversions.",
             "⚠️ **Wastage Warning**: Monitor high-frequency segments where CTR is trailing the account average to prevent budget fatigue.",
             f"🚀 **Scaling Strategy**: Prioritize budget consolidation into your top-performing 20% audience segments to boost capital efficiency."
         ]
+        return fallback, estimate_tokens(json.dumps(fallback))
 
 
-async def translate_strategy_to_params(selected_tips: List[str], current_configuration: Dict) -> Dict:
+async def translate_strategy_to_params(selected_tips: List[str], current_configuration: Dict) -> tuple[Dict, int]:
     """
     Translate textual AI strategy tips into structured Meta API parameters.
     Uses LLM to map natural language to specific targeting/budget fields.
+    Returns (params, total_tokens).
     """
+    from app.utils.credits import estimate_tokens
     try:
         llm = get_ai_llm()
         
@@ -541,13 +590,24 @@ async def translate_strategy_to_params(selected_tips: List[str], current_configu
         response = await llm.ainvoke(prompt)
         content = response.content
         
+        input_tokens = estimate_tokens(prompt)
+        output_tokens = estimate_tokens(content)
+        total_tokens = input_tokens + output_tokens
+
+        # VERIFICATION LOGGING
+        print(f"\n🔍 [AI STRATEGY TRANSLATION VERIFICATION]")
+        print(f"🗳️ Input Tokens: {input_tokens}")
+        print(f"🗳️ Output Tokens: {output_tokens}")
+        print(f"🧱 Total Billed: {total_tokens}")
+        print(f"{'='*30}\n")
+        
         # Clean and parse JSON
         import re
         json_match = re.search(r'\{.*\}', content, re.DOTALL)
         if json_match:
-            return json.loads(json_match.group())
-        return json.loads(content)
+            return json.loads(json_match.group()), total_tokens
+        return json.loads(content), total_tokens
         
     except Exception as e:
         logger.error(f"Error translating strategy to params: {e}")
-        return {}
+        return {}, 0

@@ -17,8 +17,8 @@ def start_oauth_with_config():
     if not redirect_uri:
         raise ValueError("META_CONFIG_REDIRECT_URI not set in environment variables")
     
-    print(f"🔧 Starting OAuth with Configuration ID: {config_id}")
-    print(f"🔧 Redirect URI: {redirect_uri}")
+    # print(f"🔧 Starting OAuth with Configuration ID: {config_id}")
+    # print(f"🔧 Redirect URI: {redirect_uri}")
     
     # Configuration ID uses a different URL format
     # Format: https://www.facebook.com/v20.0/dialog/oauth?config_id=XXX&redirect_uri=YYY&response_type=code
@@ -28,7 +28,7 @@ def start_oauth_with_config():
         "response_type": "code",
     }
     url = f"https://www.facebook.com/v20.0/dialog/oauth?{urlencode(params)}"
-    print(f"🔧 Generated OAuth URL: {url}")
+    # print(f"🔧 Generated OAuth URL: {url}")
     return {"url": url}
 
 

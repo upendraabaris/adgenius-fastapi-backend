@@ -27,11 +27,22 @@ async def signup(user: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     
+    # Plan mapping
+    plan_config = {
+        "free": {"credits": 100, "days": 365},
+        "starter": {"credits": 1000, "days": 30},
+        "growth": {"credits": 10000, "days": 30}
+    }
+    
+    selected_plan = user.plan if user.plan in plan_config else "free"
+    config = plan_config[selected_plan]
+    
     hashed = security.get_password_hash(user.password)
     new = models.User(
         email=user.email,
         passwordHash=hashed,
         name=user.name,
+        credits_balance=config["credits"],
         createdAt=datetime.utcnow(),
         updatedAt=datetime.utcnow()
     )
@@ -39,15 +50,15 @@ async def signup(user: schemas.UserCreate, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(new)
 
-    # Auto-assign free trial subscription
-    free_trial = models.Subscription(
+    # Initial subscription creation
+    new_sub = models.Subscription(
         user_id=new.id,
-        plan="free_trial",
+        plan=selected_plan,
         status="active",
-        amount=0,
-        expires_at=datetime.utcnow() + timedelta(days=14),
+        amount=0, # Initial signup amount if handled from frontend
+        expires_at=datetime.utcnow() + timedelta(days=config["days"]),
     )
-    db.add(free_trial)
+    db.add(new_sub)
     await db.commit()
 
     # Generate a token for the new user
@@ -101,6 +112,7 @@ async def get_profile(
         "id": user.id,
         "name": user.name,
         "email": user.email,
+        "credits_balance": user.credits_balance,
         "businessName": business.businessName if business else None,
         "objective": business.objective if business else None,
         "websiteUrl": business.websiteUrl if business else None,

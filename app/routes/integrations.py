@@ -7,6 +7,7 @@ from app.db import AsyncSessionLocal
 from app import models
 from app.services.meta_service import get_ad_accounts
 from app.mcp_utils import create_user_client
+from app.utils.auth import _require_user_id, _get_user_subscription
 import httpx
 
 router = APIRouter()
@@ -169,6 +170,22 @@ async def select_meta_account(
     user_id = _require_user_id(request)
     
     try:
+        # Get subscription plan
+        sub = await _get_user_subscription(db, user_id)
+        plan = sub.plan if sub else "free"
+        
+        # Mapping frontend plan keys to backend logic if necessary
+        # UI uses: free, starter, growth, enterprise
+        
+        # Define limits
+        limits = {
+            "free": 1,
+            "starter": 1,
+            "growth": 5,
+            "enterprise": 999
+        }
+        account_limit = limits.get(plan, 1)
+
         result = await db.execute(
             select(models.Integration).where(
                 models.Integration.user_id == user_id,
@@ -180,29 +197,41 @@ async def select_meta_account(
         if not integration:
             raise HTTPException(status_code=404, detail="Meta integration not found")
 
-        print(f"📋 Selecting account {payload.account_id} for user {user_id}")
+        # Handle FREE plan locking logic
+        if plan == "free" and integration.is_account_locked:
+            # Check if attempting to change to a DIFFERENT account
+            currently_selected = integration.selected_ad_accounts or []
+            if payload.account_id not in currently_selected:
+                raise HTTPException(
+                    status_code=403, 
+                    detail="On the Free plan, you cannot change your selected ad account once saved. Please upgrade for more flexibility."
+                )
 
-        # Validate account ID exists in ad_accounts
+        # Validate account ID exists in fetched ad_accounts
         if integration.ad_accounts:
             valid_ids = {acct.get("id") for acct in integration.ad_accounts} | {acct.get("account_id") for acct in integration.ad_accounts}
-            
             if payload.account_id not in valid_ids:
-                print(f"❌ Invalid account ID: {payload.account_id}")
-                print(f"❌ Valid IDs: {valid_ids}")
                 raise HTTPException(status_code=400, detail="Invalid ad account id")
 
-        print(f"💾 Updating integration with account: {payload.account_id}")
+        # Manage the selected_ad_accounts list
+        selected_list = integration.selected_ad_accounts or []
         
-        await db.execute(
-            update(models.Integration)
-            .where(models.Integration.id == integration.id)
-            .values(selected_ad_account=payload.account_id)
-        )
+        if payload.account_id not in selected_list:
+            if len(selected_list) >= account_limit:
+                raise HTTPException(
+                    status_code=403, 
+                    detail=f"You have reached the maximum number of selected accounts ({account_limit}) for your {plan} plan."
+                )
+            selected_list.append(payload.account_id)
+        
+        # Update and lock if free
+        integration.selected_ad_accounts = selected_list
+        if plan == "free" and len(selected_list) > 0:
+            integration.is_account_locked = True
+            
         await db.commit()
         
-        print(f"✅ Account selected successfully")
-
-        return {"ok": True, "selectedAccount": payload.account_id}
+        return {"ok": True, "selectedAccounts": selected_list, "limit": account_limit}
         
     except HTTPException:
         raise

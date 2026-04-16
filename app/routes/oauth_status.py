@@ -39,9 +39,11 @@ async def get_oauth_status(
     if not integration:
         return {"connected": False, "selectedAdAccount": None, "adAccountCount": 0}
 
+    selected_account_id = integration.selected_ad_accounts[0] if integration.selected_ad_accounts else None
+    
     return {
         "connected": True,
-        "selectedAdAccount": integration.selected_ad_account,
+        "selectedAdAccount": selected_account_id,
         "adAccountCount": len(integration.ad_accounts or []),
     }
 
