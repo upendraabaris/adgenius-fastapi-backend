@@ -7,24 +7,16 @@ from uuid import UUID
 import uuid
 import asyncio
 
-from app.db import AsyncSessionLocal
-from app import models
 from app.schemas import ChatRequest, ChatResponse, ChatHistoryResponse
 from app.mcp_utils import create_user_agent, prewarm_user_agent
+from app.utils.auth import _require_user_id, _require_active_subscription
+from app.utils.credits import deduct_credits, estimate_tokens
 
 router = APIRouter()
-
 
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
-
-
-def _require_user_id(request: Request) -> int:
-    user_id = getattr(request.state, "user_id", None)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return int(user_id)
 
 
 @router.post("", response_model=ChatResponse)
@@ -50,7 +42,7 @@ async def chat(
     await db.flush()  # Get the ID without committing
     await db.refresh(user_message)
 
-    # Load this user's Meta integration (must have selected_ad_account)
+    # Load this user's Meta integration (must have selected_ad_accounts)
     result = await db.execute(
         select(models.Integration).where(
             models.Integration.user_id == user_id,
@@ -89,7 +81,8 @@ async def chat(
         )
 
     # If integration exists but no primary ad account is selected
-    if not integration.selected_ad_account:
+    selected_accounts = integration.selected_ad_accounts or []
+    if not selected_accounts:
         guidance = (
             "You are connected to Meta, but no primary ad account is selected yet. "
             "Please open the Settings page, use the \"Select/Change Account\" option "
@@ -118,7 +111,7 @@ async def chat(
         )
 
     access_token = integration.access_token
-    ad_account_id = integration.selected_ad_account
+    ad_account_id = selected_accounts[0] # Use first active account
 
     # Remove pre-warming for now to avoid issues
     # asyncio.create_task(prewarm_user_agent(user_id, access_token))
@@ -171,6 +164,21 @@ async def chat(
             extra_data={"ad_account_id": ad_account_id}
         )
         db.add(assistant_message)
+        
+        # DEDUCT CREDITS for Chat (Input + Output)
+        input_tokens = estimate_tokens(prompt)
+        output_tokens = estimate_tokens(out)
+        total_tokens = input_tokens + output_tokens
+        
+        # VERIFICATION LOGGING
+        print(f"\n🔍 [AI CHAT VERIFICATION]")
+        print(f"🗳️ Input Tokens: {input_tokens}")
+        print(f"🗳️ Output Tokens: {output_tokens}")
+        print(f"🧱 Total Billed: {total_tokens}")
+        print(f"{'='*30}\n")
+        
+        await deduct_credits(db, user_id, total_tokens)
+        
         await db.commit()
         await db.refresh(assistant_message)
 
@@ -215,6 +223,7 @@ async def get_chat_history(
 ):
     """Get chat history for a user. If session_id is provided, get history for that session only."""
     user_id = _require_user_id(request)
+    await _require_active_subscription(db, user_id)
 
     query = select(models.ChatHistory).where(models.ChatHistory.user_id == user_id)
     
@@ -246,6 +255,7 @@ async def get_chat_sessions(
 ):
     """Get all chat sessions for a user with the latest message from each session."""
     user_id = _require_user_id(request)
+    await _require_active_subscription(db, user_id)
     
     # Get distinct sessions with their latest message
     result = await db.execute(
@@ -276,6 +286,7 @@ async def delete_chat_session(
 ):
     """Delete a complete chat session and all its messages."""
     user_id = _require_user_id(request)
+    await _require_active_subscription(db, user_id)
     
     # Check if session exists and belongs to user
     result = await db.execute(
@@ -312,6 +323,7 @@ async def delete_chat_message(
 ):
     """Delete a specific chat message."""
     user_id = _require_user_id(request)
+    await _require_active_subscription(db, user_id)
     
     # Check if message exists and belongs to user
     result = await db.execute(
@@ -340,6 +352,7 @@ async def delete_all_chats(
 ):
     """Delete all chat history for the user."""
     user_id = _require_user_id(request)
+    await _require_active_subscription(db, user_id)
     
     # Delete all messages for this user
     await db.execute(

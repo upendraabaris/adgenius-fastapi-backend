@@ -14,11 +14,11 @@ from app import models
 
 router = APIRouter()
 
-# Plan config: name -> (amount in paise, display label)
+# Plan config: name -> (amount in paise, display label, credits)
 PLANS = {
-    "free_trial": {"amount": 0, "label": "Free Trial", "days": 14},
-    "read_only":  {"amount": 450000, "label": "Read Only", "days": 30},  # ₹4500
-    "write_access": {"amount": 910000, "label": "Write Access", "days": 30},  # ₹9100
+    "free":    {"amount": 0, "label": "Free", "days": 365, "credits": 100},
+    "starter": {"amount": 139500, "label": "Starter", "days": 30, "credits": 1000},  # ₹1250
+    "growth":  {"amount": 455700, "label": "Growth", "days": 30, "credits": 10000}, # ₹4100
 }
 
 
@@ -43,7 +43,7 @@ def _require_user_id(request: Request) -> int:
 
 
 class CreateOrderRequest(BaseModel):
-    plan: str  # 'free_trial' | 'read_only' | 'write_access'
+    plan: str  # 'free' | 'starter' | 'growth'
 
 
 class VerifyPaymentRequest(BaseModel):
@@ -85,8 +85,15 @@ async def create_order(
             expires_at=expires,
         )
         db.add(sub)
+        
+        # Allocate credits for FREE plan
+        user_result = await db.execute(select(models.User).where(models.User.id == user_id))
+        user = user_result.scalars().first()
+        if user:
+            user.credits_balance = plan["credits"]
+            
         await db.commit()
-        return {"free": True, "plan": plan_key, "message": "Free trial activated"}
+        return {"free": True, "plan": plan_key, "message": "Free plan activated"}
 
     # Paid plan — create Razorpay order
     client = get_razorpay_client()
@@ -147,6 +154,15 @@ async def verify_payment(
         expires_at=expires,
     )
     db.add(sub)
+    
+    # Allocate credits for PAID plan
+    user_result = await db.execute(select(models.User).where(models.User.id == user_id))
+    user = user_result.scalars().first()
+    if user:
+        # For paid plans, we add to balance or set it? 
+        # Requirement usually implies total replenishment for the month.
+        user.credits_balance = plan["credits"]
+        
     await db.commit()
     return {"success": True, "plan": plan_key, "expires_at": expires.isoformat()}
 
@@ -166,17 +182,23 @@ async def get_subscription(
     )
     sub = result.scalars().first()
 
-    # Auto-assign free_trial for existing users who have no subscription
+    # Auto-assign free plan and credits for users who have no subscription
     if not sub:
-        expires = datetime.utcnow() + timedelta(days=14)
+        expires = datetime.utcnow() + timedelta(days=365)
         sub = models.Subscription(
             user_id=user_id,
-            plan="active",
+            plan="free",
             status="active",
             amount=0,
             expires_at=expires,
         )
         db.add(sub)
+        
+        user_result = await db.execute(select(models.User).where(models.User.id == user_id))
+        user = user_result.scalars().first()
+        if user:
+            user.credits_balance = 100 # Default free credits
+            
         await db.commit()
 
     # Mark as expired if past expiry date

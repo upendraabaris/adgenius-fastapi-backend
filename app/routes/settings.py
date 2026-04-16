@@ -8,19 +8,14 @@ from jose import jwt
 from app.config import settings
 from urllib.parse import urlencode
 
+from app.utils.auth import _require_user_id, _get_user_subscription
+
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
-
-
-def _require_user_id(request: Request) -> int:
-    user_id = getattr(request.state, "user_id", None)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return int(user_id)
 
 
 @router.get("/meta/status")
@@ -30,6 +25,18 @@ async def get_meta_connection_status(
 ):
     """Get Meta Ads connection status for settings page."""
     user_id = _require_user_id(request)
+    
+    # Get Subscription Plan
+    sub = await _get_user_subscription(db, user_id)
+    plan = sub.plan if sub else "free"
+    
+    limits = {
+        "free": 1,
+        "starter": 1,
+        "growth": 5,
+        "enterprise": 999
+    }
+    account_limit = limits.get(plan, 1)
 
     result = await db.execute(
         select(models.Integration)
@@ -48,26 +55,34 @@ async def get_meta_connection_status(
             "adAccountCount": 0,
             "adAccounts": [],
             "selectedAccountDetails": None,
+            "plan": plan,
+            "is_account_locked": False,
+            "account_limit": account_limit
         }
 
+    selected_account_id = integration.selected_ad_accounts[0] if integration.selected_ad_accounts else None
+    
     selected_account_details = None
-    if integration.selected_ad_account and integration.ad_accounts:
+    if selected_account_id and integration.ad_accounts:
         selected_account_details = next(
             (
                 acct
                 for acct in integration.ad_accounts
-                if acct.get("id") == integration.selected_ad_account
-                or acct.get("account_id") == integration.selected_ad_account
+                if acct.get("id") == selected_account_id
+                or acct.get("account_id") == selected_account_id
             ),
             None,
         )
 
     return {
         "connected": True,
-        "selectedAdAccount": integration.selected_ad_account,
-        "adAccountCount": len(integration.ad_accounts or []),
+        "selectedAdAccount": selected_account_id,
+        "adAccountCount": len(integration.ad_accounts) if integration.ad_accounts else 0,
         "adAccounts": integration.ad_accounts or [],
         "selectedAccountDetails": selected_account_details,
+        "plan": plan,
+        "is_account_locked": integration.is_account_locked,
+        "account_limit": account_limit
     }
 
 
