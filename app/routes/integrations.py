@@ -161,6 +161,9 @@ async def refresh_meta_ad_accounts(
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to refresh accounts: {str(e)}")
 
+from sqlalchemy.orm.attributes import flag_modified
+
+
 @router.post("/select-account")
 async def select_meta_account(
     request: Request,
@@ -168,81 +171,144 @@ async def select_meta_account(
     db: AsyncSession = Depends(get_db)
 ):
     user_id = _require_user_id(request)
-    
+
     try:
         # Get subscription plan
         sub = await _get_user_subscription(db, user_id)
         plan = sub.plan if sub else "free"
-        
-        # Mapping frontend plan keys to backend logic if necessary
-        # UI uses: free, starter, growth, enterprise
-        
-        # Define limits
+
+        # Plan limits
         limits = {
             "free": 1,
             "starter": 1,
             "growth": 5,
             "enterprise": 999
         }
+
         account_limit = limits.get(plan, 1)
 
+        # Get integration
         result = await db.execute(
             select(models.Integration).where(
                 models.Integration.user_id == user_id,
                 models.Integration.provider == "meta"
             )
         )
-        integration = result.scalars().first()
-        
-        if not integration:
-            raise HTTPException(status_code=404, detail="Meta integration not found")
 
-        # Handle FREE plan locking logic
+        integration = result.scalars().first()
+
+        if not integration:
+            raise HTTPException(
+                status_code=404,
+                detail="Meta integration not found"
+            )
+
+        # Normalize account id
+        account_id = str(payload.account_id)
+
+        # Existing selected accounts
+        selected_list = list(integration.selected_ad_accounts or [])
+
+        # Normalize existing ids
+        selected_list = [str(x) for x in selected_list]
+
+        # FREE PLAN LOCK CHECK
         if plan == "free" and integration.is_account_locked:
-            # Check if attempting to change to a DIFFERENT account
-            currently_selected = integration.selected_ad_accounts or []
-            if payload.account_id not in currently_selected:
+
+            if account_id not in selected_list:
                 raise HTTPException(
-                    status_code=403, 
+                    status_code=403,
                     detail="On the Free plan, you cannot change your selected ad account once saved. Please upgrade for more flexibility."
                 )
 
-        # Validate account ID exists in fetched ad_accounts
+        # Validate account exists
         if integration.ad_accounts:
-            valid_ids = {acct.get("id") for acct in integration.ad_accounts} | {acct.get("account_id") for acct in integration.ad_accounts}
-            if payload.account_id not in valid_ids:
-                raise HTTPException(status_code=400, detail="Invalid ad account id")
 
-        # Manage the selected_ad_accounts list
-        selected_list = integration.selected_ad_accounts or []
-        
-        if payload.account_id not in selected_list:
+            valid_ids = set()
+
+            for acct in integration.ad_accounts:
+
+                if acct.get("id"):
+                    valid_ids.add(str(acct.get("id")))
+
+                if acct.get("account_id"):
+                    valid_ids.add(str(acct.get("account_id")))
+
+            if account_id not in valid_ids:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid ad account id"
+                )
+
+        # =========================================
+        # MOVE SELECTED ACCOUNT TO FIRST POSITION
+        # =========================================
+
+        if account_id in selected_list:
+
+            # Remove existing
+            selected_list.remove(account_id)
+
+            # Add at first position
+            selected_list.insert(0, account_id)
+
+        else:
+
+            # Check account limit
             if len(selected_list) >= account_limit:
                 raise HTTPException(
-                    status_code=403, 
+                    status_code=403,
                     detail=f"You have reached the maximum number of selected accounts ({account_limit}) for your {plan} plan."
                 )
-            selected_list.append(payload.account_id)
-        
-        # Update and lock if free
-        integration.selected_ad_accounts = selected_list
+
+            # Add new account at first position
+            selected_list.insert(0, account_id)
+
+        # Save updated list
+        integration.selected_ad_accounts = list(selected_list)
+
+        # Important for JSONB updates
+        flag_modified(integration, "selected_ad_accounts")
+
+        # Lock free plan
         if plan == "free" and len(selected_list) > 0:
             integration.is_account_locked = True
-            
+
+        print("Before Commit:", integration.selected_ad_accounts)
+
+        # Save
         await db.commit()
-        
-        return {"ok": True, "selectedAccounts": selected_list, "limit": account_limit}
-        
+
+        # Refresh
+        await db.refresh(integration)
+
+        print("After Commit:", integration.selected_ad_accounts)
+
+        return {
+            "ok": True,
+            "selectedAccounts": integration.selected_ad_accounts,
+            "limit": account_limit,
+            "plan": plan
+        }
+
     except HTTPException:
         raise
+
     except Exception as e:
+
+        import traceback
+
         print(f"❌ Error selecting account: {str(e)}")
         print(f"❌ Error type: {type(e).__name__}")
-        import traceback
-        traceback.print_exc()
-        await db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to select account: {str(e)}")
 
+        traceback.print_exc()
+
+        await db.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to select account: {str(e)}"
+        )
 
 @router.post("/meta/save")
 async def save_meta_connection(
