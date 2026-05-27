@@ -19,6 +19,10 @@ class User(Base):
     credits_balance = Column(Integer, default=100)  # Starting credits for free plan
     createdAt = Column("createdAt", DateTime(timezone=True), server_default=func.now())
     updatedAt = Column("updatedAt", DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    
+    is_email_verified = Column(Boolean, default=False)
+    email_otp = Column(String(10), nullable=True)
+    email_otp_expires_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class BusinessProfile(Base):
@@ -84,6 +88,7 @@ class Subscription(Base):
     plan = Column(String(50), nullable=False)  # 'free_trial', 'read_only', 'write_access'
     status = Column(String(20), nullable=False, default="active")  # 'active', 'expired', 'cancelled'
     razorpay_order_id = Column(String(255))
+    razorpay_subscription_id = Column(String(255), nullable=True)
     razorpay_payment_id = Column(String(255))
     razorpay_signature = Column(String(512))
     amount = Column(Integer)  # in paise

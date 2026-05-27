@@ -13,7 +13,7 @@ app = FastAPI(title="GrowCommerce FastAPI MCP")
 
 frontend_origins = os.getenv(
     "FRONTEND_ORIGINS",
-    "growcommerce.platinum-infotech.com,http://localhost:5176"
+    "growcommerce.platinum-infotech.com,http://localhost:5176,https://e3a8-2409-40d4-420b-fbe2-b137-59e8-6a80-2b9.ngrok-free.app"
 ).split(",")
 
 # Add CORS middleware

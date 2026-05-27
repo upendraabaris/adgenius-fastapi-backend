@@ -43,9 +43,27 @@ class IntegrationCreate(BaseModel):
     selected_ad_accounts: List[str] = []
 
 class SignupResponse(BaseModel):
-    user: UserOut
-    access_token: str
-    token_type: str = "bearer"
+    message: str
+    email: str
+
+
+class VerifyOtpRequest(BaseModel):
+    email: EmailStr
+    otp: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    password: str
+
+
+class VerifyEmailTokenRequest(BaseModel):
+    token: str
+
 
 
 # -------------------------
